@@ -1,0 +1,637 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+    --primary: 221.2 83.2% 53.3%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222.2 84% 4.9%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --accent: 210 40% 96%;
+    --accent-foreground: 222.2 84% 4.9%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 221.2 83.2% 53.3%;
+    --radius: 0.5rem;
+
+    /* 站点表面色：白底 + 极浅的暖红分区底色 */
+    --surface-0: #ffffff;
+    --surface-1: #fffbfa;
+    --surface-2: #fff5f4;
+    /* 浅红强调色（与 tailwind flare-500 保持一致） */
+    --flare-500: 248, 87, 74;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 84% 4.9%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 224.3 76.3% 94.1%;
+  }
+
+  * {
+    @apply border-gray-200;
+  }
+
+  body {
+    @apply bg-white text-ink-900;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* 自定义滚动条 */
+  ::-webkit-scrollbar {
+    @apply h-2 w-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-ink-200;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-ink-300;
+  }
+
+  /* 文本选中：浅红 */
+  ::selection {
+    background: rgba(var(--flare-500), 0.18);
+    @apply text-ink-900;
+  }
+
+  /* 焦点环 */
+  :focus-visible {
+    @apply outline-none ring-2 ring-flare-400/60 ring-offset-2 ring-offset-white;
+  }
+}
+
+@layer components {
+  /* 页面容器 */
+  .container {
+    @apply mx-auto max-w-7xl px-4 sm:px-6 lg:px-8;
+  }
+
+  /* Button-style helpers */
+  .btn-primary {
+    @apply bg-blue-600 text-white hover:bg-blue-700 focus:ring-blue-500;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-100 text-gray-900 hover:bg-gray-200 focus:ring-gray-500;
+  }
+
+  .btn-outline {
+    @apply border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 focus:ring-blue-500;
+  }
+
+  /* Card helpers */
+  .card {
+    @apply rounded-lg border border-gray-200 bg-white shadow-sm;
+  }
+
+  .card-hover {
+    @apply transition-shadow hover:shadow-md;
+  }
+
+  /* Input helpers */
+  .input {
+    @apply flex h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm;
+  }
+
+  .input-focus {
+    @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2;
+  }
+
+  /* Typography helpers */
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-r from-blue-600 to-blue-800 bg-clip-text text-transparent;
+  }
+
+  /* Animation helpers */
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-in-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .animate-bounce-slow {
+    animation: bounce 2s infinite;
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 白底站点构件                                                        */
+  /* ------------------------------------------------------------------ */
+
+  /* 卡片：白面 + 极轻阴影 + 发丝描边 */
+  .card-soft {
+    @apply rounded-2xl border border-ink-900/[0.07] bg-white shadow-card;
+  }
+
+  /* 玻璃拟态（吸顶导航、浮动工具条）：白底半透明 + 背景模糊 */
+  .glass {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    border-bottom: 1px solid rgba(20, 20, 20, 0.06);
+  }
+
+  /* 渐变描边：用 mask 造 1px 浅红→金细边 */
+  .ring-gradient {
+    position: relative;
+  }
+
+  .ring-gradient::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      140deg,
+      rgba(var(--flare-500), 0.45),
+      rgba(201, 150, 26, 0.28) 45%,
+      rgba(20, 20, 20, 0.05) 75%
+    );
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    pointer-events: none;
+  }
+
+  /* 边框流光：一道浅红高光沿卡片边缘循环扫过 */
+  .beam-border {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .beam-border::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    background: linear-gradient(
+      100deg,
+      transparent 25%,
+      rgba(var(--flare-500), 0.75) 45%,
+      rgba(201, 150, 26, 0.65) 55%,
+      transparent 75%
+    );
+    background-size: 250% 100%;
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+    animation: beam-sweep var(--beam-duration, 4s) linear infinite;
+  }
+
+  /* 分区标题右侧的渐隐细线 */
+  .hairline-x {
+    background: linear-gradient(
+      90deg,
+      rgba(var(--flare-500), 0.45),
+      rgba(20, 20, 20, 0.08) 40%,
+      transparent
+    );
+  }
+
+  /* 行情/统计数字：等宽 + 表格数字对齐，避免跳动 */
+  .num {
+    font-family: theme('fontFamily.num');
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+    letter-spacing: -0.01em;
+  }
+
+  /* 行内代码片段 */
+  .code-chip {
+    @apply rounded border border-ink-900/10 bg-ink-50 px-1.5 py-0.5 text-[11px] text-flare-700;
+    font-family: theme('fontFamily.num');
+  }
+
+  /* 表单控件 */
+  .field-dark {
+    @apply h-9 w-full rounded-md border border-ink-900/10 bg-white px-3 text-sm text-ink-900 outline-none transition-colors placeholder:text-ink-400;
+  }
+
+  .field-dark:focus {
+    @apply border-flare-400 bg-white;
+    box-shadow: 0 0 0 3px rgba(var(--flare-500), 0.13);
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 指针晕圈（浅红）                                                     */
+  /* ------------------------------------------------------------------ */
+
+  /* 跟随光斑：固定层内的圆形柔光，用 translate3d 跟随指针。
+     ⚠️ 刻意不用 `filter: blur()` —— 大尺寸元素每帧重算模糊会明显掉帧，
+     改用多段径向渐变做出同等柔和的衰减，元素只需合成、不重绘。 */
+  .halo-follow {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 34rem;
+    height: 34rem;
+    margin: -17rem 0 0 -17rem;
+    border-radius: 9999px;
+    background: radial-gradient(
+      circle,
+      rgba(var(--flare-500), 0.2) 0%,
+      rgba(var(--flare-500), 0.15) 20%,
+      rgba(var(--flare-500), 0.08) 42%,
+      rgba(var(--flare-500), 0.03) 60%,
+      rgba(var(--flare-500), 0) 78%
+    );
+    opacity: 0;
+    transition:
+      opacity 0.55s ease,
+      width 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+      height 0.4s cubic-bezier(0.22, 1, 0.36, 1),
+      margin 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform, opacity;
+  }
+
+  .halo-follow[data-active='true'] {
+    opacity: 1;
+  }
+
+  /* 按住时晕圈收紧变亮，形成「按压反馈」 */
+  .halo-follow[data-pressed='true'] {
+    width: 18rem;
+    height: 18rem;
+    margin: -9rem 0 0 -9rem;
+    background: radial-gradient(
+      circle,
+      rgba(var(--flare-500), 0.3) 0%,
+      rgba(var(--flare-500), 0.22) 24%,
+      rgba(var(--flare-500), 0.11) 48%,
+      rgba(var(--flare-500), 0) 80%
+    );
+  }
+
+  /* 点击/拖动时扩散的晕圈（同样用渐变代替模糊） */
+  .halo-ripple {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 22rem;
+    height: 22rem;
+    border-radius: 9999px;
+    pointer-events: none;
+    background: radial-gradient(
+      circle,
+      rgba(var(--flare-500), 0.24) 0%,
+      rgba(var(--flare-500), 0.18) 22%,
+      rgba(var(--flare-500), 0.08) 48%,
+      rgba(var(--flare-500), 0) 76%
+    );
+  }
+
+  /* 卡片内的悬停光斑底层（供 SpotlightCard 使用） */
+  .halo-soft {
+    background: radial-gradient(
+      circle at var(--mx, 50%) var(--my, 0%),
+      rgba(var(--flare-500), 0.14),
+      rgba(var(--flare-500), 0.04) 42%,
+      transparent 70%
+    );
+  }
+}
+
+/* Extra utilities */
+@layer utilities {
+  /* Grid helpers */
+  .grid-auto-fit {
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  }
+
+  .grid-auto-fill {
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  }
+
+  /* Responsive visibility */
+  .mobile-only {
+    @apply block sm:hidden;
+  }
+
+  .desktop-only {
+    @apply hidden sm:block;
+  }
+
+  /* Dark mode surface */
+  .dark-mode {
+    @apply dark:bg-gray-900 dark:text-gray-100;
+  }
+
+  /* 打印 */
+  @media print {
+    .print-hidden {
+      @apply hidden;
+    }
+
+    .print-visible {
+      @apply block;
+    }
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* 文本与装饰工具                                                     */
+  /* ---------------------------------------------------------------- */
+
+  .text-gradient-flare {
+    @apply bg-gradient-to-r from-flare-600 via-flare-500 to-gold-600 bg-clip-text text-transparent;
+  }
+
+  .text-gradient-gold {
+    @apply bg-gradient-to-r from-gold-600 via-gold-500 to-flare-500 bg-clip-text text-transparent;
+  }
+
+  .text-gradient-ink {
+    @apply bg-gradient-to-b from-ink-900 via-ink-900 to-ink-500 bg-clip-text text-transparent;
+  }
+
+  /* 数字柔光（白底上克制使用，避免糊字） */
+  .glow-text-flare {
+    text-shadow: 0 0 18px rgba(var(--flare-500), 0.35);
+  }
+
+  .glow-text-bull {
+    text-shadow: 0 0 18px rgba(226, 59, 46, 0.32);
+  }
+
+  .glow-text-bear {
+    text-shadow: 0 0 18px rgba(16, 163, 110, 0.32);
+  }
+
+  /* 顶部/底部渐隐遮罩，用于跑马灯与长列表边缘 */
+  .mask-fade-x {
+    -webkit-mask-image: linear-gradient(
+      90deg,
+      transparent,
+      #000 8%,
+      #000 92%,
+      transparent
+    );
+    mask-image: linear-gradient(
+      90deg,
+      transparent,
+      #000 8%,
+      #000 92%,
+      transparent
+    );
+  }
+
+  /* 悬停暂停跑马灯 */
+  .marquee-track:hover {
+    animation-play-state: paused;
+  }
+
+  /*
+   * 「合作单位与会员去向」logo 墙的「呼吸」动效。
+   *
+   * 为什么需要它：只让整排 logo 匀速滚动，观感是一条传送带，
+   * 与需求里「缓慢流动 + 一些淡出、一些淡入」不是一回事。给每个 logo 叠一个
+   * 透明度动画，并用 inline 的 animation-delay 错开相位，
+   * 就能让它们在滚动中各自明暗起伏，形成错落感。
+   *
+   * 选择器同时挂 `.marquee-track:hover &`，是为了悬停暂停滚动时
+   * 呼吸动效也一起停下 —— 否则鼠标停下的瞬间 logo 还在闪，很出戏。
+   */
+  .logo-chip {
+    animation: logo-breathe 7s ease-in-out infinite;
+  }
+
+  .marquee-track:hover .logo-chip {
+    animation-play-state: paused;
+  }
+
+  /* 隐藏滚动揭示元素的可访问性兜底：尊重系统的「减少动态效果」设置 */
+  @media (prefers-reduced-motion: reduce) {
+    .logo-chip,
+    .marquee-track {
+      animation: none !important;
+    }
+
+    .reveal {
+      opacity: 1;
+      transform: none;
+      transition: none;
+    }
+  }
+
+  /* 滚动揭示：初始化隐藏，进入视口后由 Reveal 组件加 data-visible */
+  .reveal {
+    opacity: 0;
+    transform: translateY(22px);
+    transition:
+      opacity 0.72s cubic-bezier(0.22, 1, 0.36, 1),
+      transform 0.72s cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: opacity, transform;
+  }
+
+  .reveal[data-visible='true'] {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* 3D 透视容器（卡片轻微倾斜） */
+  .perspective {
+    perspective: 1200px;
+  }
+}
+
+/* 边框流光扫过 */
+@keyframes beam-sweep {
+  from {
+    background-position: 250% 0;
+  }
+
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/*
+ * 「合作单位与会员去向」logo 的明暗呼吸。
+ *
+ * 最低点刻意不设到 0（留 0.45）：完全透明会让 logo 在滚动中"凭空消失"，
+ * 观感像加载失败而不是淡出。0.45 → 1 的区间既看得出起伏，又始终可辨识。
+ */
+@keyframes logo-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.98);
+  }
+
+  50% {
+    opacity: 1;
+    transform: scale(1.03);
+  }
+}
+
+/*
+ * 跑马灯位移。
+ *
+ * ⚠️ 这两个关键帧**必须定义在这里（原始 CSS）**，不能只写在 tailwind.config.js 的
+ * `theme.extend.keyframes` 里。
+ *
+ * 原因：Tailwind 只为「被 `animate-*` 工具类引用到」的 keyframes 生成 @keyframes 规则。
+ * 而 `Marquee` 组件是**内联**写 `animation: marquee 102s linear infinite`
+ * （因为时长要按内容长度动态算），全程没有用到 `animate-marquee` 类 ——
+ * 于是 Tailwind 判定它"没人用"，产物里**根本没有 @keyframes marquee**，
+ * 全站跑马灯（行情条、看板、logo 墙）因此一直是静止的，且不报任何错。
+ *
+ * ⚠️ 位移必须是 -100%，不能是 -50%。无缝的充要条件是「位移量 == 内容的一个完整周期」；
+ * `Marquee` 把内容放在**两个并列 track** 里而非在同一 track 内复制，用 -50% 时
+ * 每轮循环只走了半个周期，回起点会硬跳半屏（实测 924px 的轨道跳 462px）。
+ */
+@keyframes marquee {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+/* 反向跑马灯：位移取反，同样是一个完整周期，故同样无缝 */
+@keyframes marquee2 {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+/* Keyframes */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes bounce {
+  0%,
+  20%,
+  53%,
+  80%,
+  100% {
+    transform: translate3d(0, 0, 0);
+  }
+
+  40%,
+  43% {
+    transform: translate3d(0, -30px, 0);
+  }
+
+  70% {
+    transform: translate3d(0, -15px, 0);
+  }
+
+  90% {
+    transform: translate3d(0, -4px, 0);
+  }
+}
+
+/* Dark color-scheme hint */
+@media (prefers-color-scheme: dark) {
+  .dark-mode {
+    @apply bg-gray-900 text-gray-100;
+  }
+}
+
+/* High contrast */
+@media (prefers-contrast: high) {
+  .high-contrast {
+    @apply border-2 border-black;
+  }
+}
+
+/* 降低动效偏好：停掉装饰动画，但保留内容可见性 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
+
+  /* 晕圈属于纯装饰，直接隐藏 */
+  .halo-follow,
+  .halo-ripple {
+    display: none;
+  }
+}

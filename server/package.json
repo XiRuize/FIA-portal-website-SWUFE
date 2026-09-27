@@ -1,0 +1,19 @@
+{
+  "name": "@swufe-fia/server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "西南财经大学金融投资协会官网自建轻量后端（零运行时第三方依赖）",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "seed": "node scripts/seed.mjs",
+    "scan:resources": "node scripts/scan-resources.mjs",
+    "test": "node --test \"test/**/*.test.js\"",
+    "verify": "node scripts/verify.mjs",
+    "setup": "node scripts/seed.mjs && node scripts/scan-resources.mjs"
+  }
+}

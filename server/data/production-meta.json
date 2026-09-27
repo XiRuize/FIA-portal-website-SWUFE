@@ -1,0 +1,76 @@
+{
+  "_note": "「社团成员产出」的作品元数据与类目覆写表。键 = 素材目录（资料分享模块素材/）下的相对路径，POSIX 风格。扫描脚本每次运行都会读取本文件并合并入库；删除某个条目即恢复「按文件名自动归类」。新增作品时若文件名不足以让自动规则判对，就在这里点名覆写。",
+  "_fields": {
+    "displayCategory": "覆盖自动归类结果（可选）。目前只有『社团成员产出』需要覆写。",
+    "title": "作品展示名（可选）。留空则用去掉扩展名的文件名。",
+    "author": "作者/作者团队署名。",
+    "authorTitle": "作者身份，如部门、年级、指导教师。",
+    "authorNote": "作者简介，一两句话。",
+    "summary": "作品简介，详情页与卡片共用。",
+    "tags": "标签数组。",
+    "screenshots": "作品截图/报表预览。元素为 { src, caption }；src 可以是素材目录内的相对路径（会解析为受控的预览地址），也可以是 http(s) 外链。"
+  },
+  "version": 1,
+  "items": {
+    "研发部内部资料/DeepSeek_DataRoom.rar": {
+      "displayCategory": "社团成员产出",
+      "title": "DeepSeek 尽调资料包",
+      "author": "协会研发部",
+      "authorTitle": "部门作品",
+      "authorNote": "由研发部组织整理，具体执笔成员待补充。",
+      "summary": "以 DeepSeek 为研究对象的尽调资料汇编（Word 文档包），含公开信息梳理与要点摘录，供协会内部研究交流使用。",
+      "tags": ["尽调", "AI 大模型", "资料包"],
+      "screenshots": []
+    },
+    "研发部内部资料/Kimi_DataRoom_DOCX.rar": {
+      "displayCategory": "社团成员产出",
+      "title": "Kimi 尽调资料包",
+      "author": "协会研发部",
+      "authorTitle": "部门作品",
+      "authorNote": "由研发部组织整理，具体执笔成员待补充。",
+      "summary": "以 Kimi（月之暗面）为研究对象的尽调资料汇编（Word 文档包），用于内部研究与讨论。",
+      "tags": ["尽调", "AI 大模型", "资料包"],
+      "screenshots": []
+    },
+    "研发部内部资料/Xiaohongshu_DataRoom_DOCX.zip": {
+      "displayCategory": "社团成员产出",
+      "title": "小红书尽调资料包",
+      "author": "协会研发部",
+      "authorTitle": "部门作品",
+      "authorNote": "由研发部组织整理，具体执笔成员待补充。",
+      "summary": "以小红书为研究对象的尽调资料汇编（Word 文档包），覆盖业务与经营信息的公开整理，供内部研究使用。",
+      "tags": ["尽调", "互联网平台", "资料包"],
+      "screenshots": []
+    },
+    "研发部内部资料/灵心巧手_DataRoom_Word版.rar": {
+      "displayCategory": "社团成员产出",
+      "title": "灵心巧手 尽调资料包",
+      "author": "协会研发部",
+      "authorTitle": "部门作品",
+      "authorNote": "由研发部组织整理，具体执笔成员待补充。",
+      "summary": "以灵心巧手（灵巧手赛道公司）为对象的尽调资料汇编（Word 版），配合协会「具身智能之灵巧手」专题研究使用。",
+      "tags": ["尽调", "具身智能", "灵巧手"],
+      "screenshots": []
+    },
+    "研发部内部资料/具身智能之“灵巧手”_DOCX.rar": {
+      "displayCategory": "社团成员产出",
+      "title": "具身智能之「灵巧手」专题资料",
+      "author": "协会研发部",
+      "authorTitle": "部门作品",
+      "authorNote": "由研发部组织整理，具体执笔成员待补充。",
+      "summary": "围绕具身智能「灵巧手」方向的专题研究资料包（Word 版），梳理赛道公司、技术路线与关键指标。",
+      "tags": ["具身智能", "灵巧手", "专题研究"],
+      "screenshots": []
+    },
+    "培训部分享资料/8.29每日新闻.pdf": {
+      "displayCategory": "社团成员产出",
+      "title": "每日新闻 · 8.29",
+      "author": "协会研发部",
+      "authorTitle": "部门作品",
+      "authorNote": "由研发部组织整理，具体执笔成员待补充。",
+      "summary": "协会每日整理的财经与市场新闻汇总（8 月 29 日），供成员快速掌握当日要闻。",
+      "tags": ["每日新闻", "市场资讯"],
+      "screenshots": []
+    }
+  }
+}
