@@ -26,6 +26,27 @@ interface RequireAuthProps {
   required?: Capability[];
   /** 权限不足时的兜底展示，默认走内置的「无权访问」页 */
   fallback?: ReactNode;
+  /**
+   * 被拒绝时的文案覆盖。
+   *
+   * 存在的原因：「栏目与网站管理」是一个**有指定说法**的入口 ——
+   * 产品要求点进去时原样显示「没有权限，请登录管理员账号」，
+   * 而不是通用的「该页面需要登录」。通用文案会让人以为是普通成员页，
+   * 不知道该换成管理员账号。
+   *
+   * ⚠️ 注意它同时作用于**未登录**与**已登录但权限不足**两种状态：
+   * 对站长来说这两种情况要做的动作是同一件事（去登录/换账号），
+   * 分成两套说法只会让人多读一段字。
+   */
+  denied?: DeniedCopy;
+}
+
+/** 被拒绝时的自定义文案 */
+export interface DeniedCopy {
+  title: string;
+  message: string;
+  /** 主按钮文案，默认「前往登录」 */
+  actionLabel?: string;
 }
 
 /** 加载中 */
@@ -39,13 +60,39 @@ function Checking() {
 }
 
 /** 未登录 */
-function NeedLogin({ from }: { from: string }) {
+function NeedLogin({ from, denied }: { from: string; denied?: DeniedCopy }) {
   const next = encodeURIComponent(from);
   /**
    * 「社团成员产出」是被访客主动点击进来的 —— 它需要明确指出「这个功能为什么进不去、
    * 想进去该找谁」，而不是丢一句通用的「请登录」。其它受保护页仍走通用文案。
    */
   const isProductions = from.startsWith('/productions');
+
+  // 自定义文案优先：调用方点名了要显示什么，就不再套用内置说法
+  if (denied) {
+    return (
+      <div className='mx-auto flex min-h-[52vh] max-w-md flex-col items-center justify-center px-4 text-center'>
+        <div className='flex h-12 w-12 items-center justify-center rounded-full bg-flare-50'>
+          <ShieldX className='h-5 w-5 text-flare-600' />
+        </div>
+        <h2 className='mt-5 text-lg font-semibold text-ink-900'>{denied.title}</h2>
+        <p className='mt-2 text-sm leading-relaxed text-ink-500'>{denied.message}</p>
+        <Link
+          to={`/login?next=${next}`}
+          className='mt-6 rounded-lg bg-brand-700 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand-800'
+        >
+          {denied.actionLabel ?? '前往登录'}
+        </Link>
+        <Link
+          to='/'
+          className='mt-3 text-xs text-ink-400 transition-colors hover:text-flare-600'
+        >
+          返回首页
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className='mx-auto flex min-h-[52vh] max-w-md flex-col items-center justify-center px-4 text-center'>
       <div className='flex h-12 w-12 items-center justify-center rounded-full bg-brand-50'>
@@ -88,7 +135,47 @@ function NeedLogin({ from }: { from: string }) {
 }
 
 /** 已登录但权限不足 */
-function NeedPermission({ capabilities }: { capabilities: Capability[] }) {
+function NeedPermission({
+  capabilities,
+  from,
+  denied,
+}: {
+  capabilities: Capability[];
+  from: string;
+  denied?: DeniedCopy;
+}) {
+  if (denied) {
+    return (
+      <div className='mx-auto flex min-h-[52vh] max-w-md flex-col items-center justify-center px-4 text-center'>
+        <div className='flex h-12 w-12 items-center justify-center rounded-full bg-flare-50'>
+          <ShieldX className='h-5 w-5 text-flare-600' />
+        </div>
+        <h2 className='mt-5 text-lg font-semibold text-ink-900'>{denied.title}</h2>
+        <p className='mt-2 text-sm leading-relaxed text-ink-500'>{denied.message}</p>
+        <p className='num mt-3 rounded-md bg-ink-50 px-3 py-1.5 text-xs text-ink-500'>
+          需要权限：{capabilities.join(' / ') || '（未指定）'}
+        </p>
+        {/*
+          已登录但权限不足时，光给「前往登录」会让人困惑（我不就在登录状态吗）。
+          因此这里给的是「换账号登录」—— 因为常见的真实场景就是：
+          某人用临时浏览账号进来了，想管内容却没权限。
+        */}
+        <Link
+          to={`/login?next=${encodeURIComponent(from)}`}
+          className='mt-6 rounded-lg bg-brand-700 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-brand-800'
+        >
+          {denied.actionLabel ?? '切换到管理员账号'}
+        </Link>
+        <Link
+          to='/'
+          className='mt-3 text-xs text-ink-400 transition-colors hover:text-flare-600'
+        >
+          返回首页
+        </Link>
+      </div>
+    );
+  }
+
   return (
     <div className='mx-auto flex min-h-[52vh] max-w-md flex-col items-center justify-center px-4 text-center'>
       <div className='flex h-12 w-12 items-center justify-center rounded-full bg-flare-50'>
@@ -160,7 +247,7 @@ function Expired() {
  * 守卫组件。用法：
  *   <RequireAuth required={[CAP_MANAGE_CONTENT]}><Admin /></RequireAuth>
  */
-export function RequireAuth({ children, required = [], fallback }: RequireAuthProps) {
+export function RequireAuth({ children, required = [], fallback, denied }: RequireAuthProps) {
   const { status, capabilities, account, error } = useAuth();
   const location = useLocation();
 
@@ -169,7 +256,7 @@ export function RequireAuth({ children, required = [], fallback }: RequireAuthPr
 
   if (status !== 'authenticated') {
     if (fallback) return <>{fallback}</>;
-    return <NeedLogin from={location.pathname} />;
+    return <NeedLogin from={location.pathname} denied={denied} />;
   }
 
   // 临时账号过期的兜底：后端已在登录与每次鉴权时拦截，
@@ -178,7 +265,13 @@ export function RequireAuth({ children, required = [], fallback }: RequireAuthPr
 
   if (!satisfies(capabilities, required)) {
     if (fallback) return <>{fallback}</>;
-    return <NeedPermission capabilities={required} />;
+    return (
+      <NeedPermission
+        capabilities={required}
+        from={location.pathname}
+        denied={denied}
+      />
+    );
   }
 
   return <>{children}</>;

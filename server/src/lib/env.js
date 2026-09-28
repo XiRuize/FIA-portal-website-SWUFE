@@ -124,6 +124,20 @@ export function buildConfig(env) {
     host: env.get('HOST', '127.0.0.1'),
     dbPath,
     materialsDir,
+    /**
+     * 作品元数据覆写表（sidecar JSON）的位置。
+     *
+     * 必须与 `materialsDir` 成对配置：它按**相对素材目录的路径**记录覆写
+     * （分类、访问级别、作者…），指向另一份素材的覆写表毫无意义。
+     * 早先它是写死的绝对路径，于是测试/第二实例会往生产那张表里写
+     * —— 表现为生产覆写表里出现一批指不到任何文件的路径。
+     *
+     * 相对路径以 `server/` 为基准，默认落在 `server/data/production-meta.json`。
+     */
+    resourceMetaPath: resolvePath(
+      env.get('RESOURCE_META_PATH', './data/production-meta.json'),
+      SERVER_DIR
+    ),
     cookieName: env.get('COOKIE_NAME', 'fia_session'),
     sessionTtlHoursAdmin: env.int('SESSION_TTL_HOURS_ADMIN', 168),
     sessionTtlHoursViewer: env.int('SESSION_TTL_HOURS_VIEWER', 24),
@@ -143,5 +157,16 @@ export function buildConfig(env) {
       keepDays: env.int('NEWS_KEEP_DAYS', 7),
     },
     viewerDefaultDays: env.int('SEED_VIEWER_DAYS', 30),
+    /**
+     * 是否信任反代下发的 `X-Forwarded-For`。
+     *
+     * **默认 false，且不应轻易打开**。XFF 是客户端可伪造的普通请求头，
+     * 而它同时决定了「登录限流的 IP 维度」与「点赞指纹」—— 一旦无条件取信，
+     * 换 IP 伪造值即可绕过限流与点赞去重（均已实测复现）。
+     *
+     * 仅当站点确实挂在**可信**反向代理（Nginx / 云 SLB）之后、
+     * 且该代理会覆写而非追加 XFF 时，才设为 true。
+     */
+    trustProxy: env.bool('TRUST_PROXY', false),
   };
 }

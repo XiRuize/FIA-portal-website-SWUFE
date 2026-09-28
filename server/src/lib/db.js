@@ -138,6 +138,82 @@ CREATE TABLE IF NOT EXISTS settings (
   secret      INTEGER NOT NULL DEFAULT 0,
   updated_at  TEXT NOT NULL
 );
+
+-- ---------------------------------------------------------------------------
+-- 临时权限申请（「栏目与网站管理 · 账号管理」的待审批队列）
+--
+-- 申请人在登录页填手机号提交，管理员在后台批准。批准后：
+--   1. 以**手机号本身**作为账号名创建 viewer 账号，生成 6 位随机口令；
+--   2. 往 notifications 写一条待发送通知（内容为约定的短信文案）。
+-- 刻意保留 ip / fingerprint：便于事后判断是否为同一来源的批量提交。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS access_requests (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  phone       TEXT NOT NULL,
+  name        TEXT NOT NULL DEFAULT '',
+  org         TEXT NOT NULL DEFAULT '',
+  reason      TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'pending'
+              CHECK (status IN ('pending', 'approved', 'rejected')),
+  ip          TEXT NOT NULL DEFAULT '',
+  fingerprint TEXT NOT NULL DEFAULT '',
+  created_at  TEXT NOT NULL,
+  handled_at  TEXT,
+  handled_by  TEXT,
+  -- 批准后指向 accounts.id，便于从申请跳到账号
+  account_id  INTEGER,
+  handle_note TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_access_requests_status ON access_requests(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_access_requests_phone ON access_requests(phone);
+
+-- ---------------------------------------------------------------------------
+-- 通知发件箱
+--
+-- 站点没有短信网关（零第三方依赖是硬约束），因此「发短信」这一步实现为
+-- **写一条待发送记录**：内容完全按约定文案渲染好，管理员在后台可一键复制、
+-- 也可以标为已发送。将来挂上真实通道（短信网关 / 邮件中继）时，
+-- 只需实现一个投递器读这张表，业务代码不动。
+--
+-- 这样处理而不是假装「已经发了」：站内必须能区分「已生成」与「已送达」，
+-- 否则申请人收不到口令时无人知道断在哪一环。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS notifications (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- 投递通道：outbox（默认，仅落库）/ sms / email
+  channel    TEXT NOT NULL DEFAULT 'outbox',
+  to_addr    TEXT NOT NULL,
+  subject    TEXT NOT NULL DEFAULT '',
+  body       TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'pending'
+             CHECK (status IN ('pending', 'sent', 'failed')),
+  -- 关联业务对象：如 ('access_request', 12)
+  ref_type   TEXT NOT NULL DEFAULT '',
+  ref_id     INTEGER,
+  created_at TEXT NOT NULL,
+  sent_at    TEXT,
+  error      TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_status ON notifications(status, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- 站点浏览量
+--
+-- 粒度是「天 × 路径 × 指纹」，主键天然去重 —— 同一访客反复刷新同一页面
+-- 当天只计一次「独立访客」，但 hits 仍能反映热度：hits 由 COUNT(*) 得出，
+-- 去重口径由 COUNT(DISTINCT fingerprint) 得出，两个口径都保留。
+--
+-- 为什么不存原始请求日志：那张表按天无条件增长且绝大多数行永不被查询；
+-- 按天聚合后行数被「路径数 × 访客数」封顶，长期运行也不失控。
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS page_view_events (
+  day         TEXT NOT NULL,   -- YYYY-MM-DD（Asia/Shanghai）
+  path        TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  PRIMARY KEY (day, path, fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_page_views_day ON page_view_events(day);
 `;
 
 /**
@@ -167,6 +243,18 @@ function ensureColumns(db) {
     ['resources', 'screenshots', "TEXT NOT NULL DEFAULT '[]'"],
     // 标签：逗号分隔（与文章表的 tags 口径一致）
     ['resources', 'tags', "TEXT NOT NULL DEFAULT ''"],
+
+    // ---- accounts：账号来源与手机号 ----
+    //
+    // 需求是「批准申请后以手机号作为账号」。得能区分一个 viewer 账号是
+    // 人工新建的、还是从申请批准来的，否则账号列表里会分不清谁该收到通知。
+    // 取值：seed（种子）/ manual（后台新建）/ application（申请批准）
+    ['accounts', 'source', "TEXT NOT NULL DEFAULT 'manual'"],
+    ['accounts', 'phone', "TEXT NOT NULL DEFAULT ''"],
+    // 累计延长次数与重置次数：后台列表要显示「已延长 N 次」这类信息，
+    // 也算一条轻量的审计痕迹（谁在什么时候动过这个账号的权限）
+    ['accounts', 'extended_count', 'INTEGER NOT NULL DEFAULT 0'],
+    ['accounts', 'reset_count', 'INTEGER NOT NULL DEFAULT 0'],
   ];
 
   for (const [table, column, decl] of additions) {

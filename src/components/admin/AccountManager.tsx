@@ -1,21 +1,24 @@
 /**
- * 账号管理面板（仅管理权限账号可见）。
+ * 「账号管理」子栏目。
  *
- * 对应需求的两种角色：
- * - **管理权限**：社团成员共用，可进管理后台、管内容、管账号；
- * - **临时浏览权限**：给新进成员与外部合作者，**到期自动作废**。
+ * 三块，对应需求里的三条：
+ * 1. **临时权限申请**：显示申请人提交的手机号 → 批准后手机号即账号，弹出口令与短信文案
+ * 2. **已运行的临时账号**：账号 + 剩余权限时长（过期红字）+ 一键重置权限 / 延长 / 吊销
+ * 3. **通知发件箱**：短信文案已生成，转发后标记已发送（零第三方依赖，未接短信网关）
  *
- * 界面上刻意把「有效期」做成显式字段：临时账号必须带到期时间，
- * 因为「过期作废」是这套权限体系里最容易事后扯皮的一条，写清楚比事后解释便宜。
+ * 权限：整个面板由路由层的 `RequireAuth` 拦在 `canManageAccounts` 之后，
+ * 后端每个端点也重新判定一次 —— 前端守卫只是体验层，真隔离在服务端。
  */
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Ban,
+  BellRing,
   Check,
+  Clock,
   Copy,
   KeyRound,
-  Loader2,
+  Phone,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -24,84 +27,65 @@ import {
 } from 'lucide-react';
 import {
   accountsApi,
-  ApiError,
+  adminAccessApi,
+  type AccessRequestAdmin,
   type Account,
   type CreateAccountInput,
-  type Role,
+  type NotificationItem,
+  type NotificationSummary,
+  type RequestSummary,
 } from '@/lib/backendApi';
-import { useAuth } from '@/lib/auth';
-import { AdminButton, Field, Modal, Panel, SelectInput, TextInput } from '@/components/admin/AdminUI';
+import {
+  AdminButton,
+  Field,
+  Modal,
+  Panel,
+  SelectInput,
+  TextArea,
+  TextInput,
+} from '@/components/admin/AdminUI';
+import { cn } from '@/lib/utils';
 
-/** 生成一个足够强的随机口令（前端生成，只显示一次） */
-function suggestPassword(): string {
-  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
-  const lower = 'abcdefghijkmnopqrstuvwxyz';
-  const digits = '23456789';
-  const all = upper + lower + digits + '!@#$%^&*';
-  const pick = (set: string) => set[Math.floor(Math.random() * set.length)];
-  // 保证四类字符各至少一个，再补足长度，避免生成的口令被强度校验拒绝
-  const base = [pick(upper), pick(lower), pick(digits), pick('!@#$%^&*')];
-  while (base.length < 14) base.push(pick(all));
-  // Fisher-Yates 洗牌，避免「前四位固定字符类别」的可预测模式
-  for (let i = base.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [base[i], base[j]] = [base[j], base[i]];
-  }
-  return base.join('');
+export default function AccountManager() {
+  return (
+    <div className='space-y-6'>
+      <RequestQueue />
+      <TempAccounts />
+      <NotificationOutbox />
+      <CreateAccount />
+    </div>
+  );
 }
 
-/** 默认到期时间：30 天后 */
-function defaultExpiry(days = 30): string {
-  const d = new Date(Date.now() + days * 86_400_000);
-  // datetime-local 需要 `YYYY-MM-DDTHH:mm`，且必须是本地时间而非 UTC
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(
-    d.getMinutes()
-  )}`;
-}
+/* ───────────────────────── 1. 申请队列 ───────────────────────── */
 
-/** 把剩余时间说成人话 */
-function expiryText(acc: Account): { text: string; tone: 'ok' | 'warn' | 'bad' | 'muted' } {
-  if (acc.revokedAt) return { text: '已吊销', tone: 'bad' };
-  if (acc.role === 'admin') {
-    return acc.expiresAt
-      ? { text: `至 ${acc.expiresAt.slice(0, 10)}`, tone: 'ok' }
-      : { text: '长期有效', tone: 'muted' };
-  }
-  if (!acc.expiresAt) return { text: '未设到期', tone: 'warn' };
-  const ms = new Date(acc.expiresAt).getTime() - Date.now();
-  if (ms <= 0) return { text: '已过期', tone: 'bad' };
-  const days = Math.floor(ms / 86_400_000);
-  const hours = Math.floor((ms % 86_400_000) / 3_600_000);
-  if (days >= 1) {
-    return { text: `剩余 ${days} 天`, tone: days <= 7 ? 'warn' : 'ok' };
-  }
-  return { text: `剩余 ${hours} 小时`, tone: 'warn' };
-}
-
-const TONE_CLASS: Record<string, string> = {
-  ok: 'border-brand-200 bg-brand-50 text-brand-700',
-  warn: 'border-gold-200 bg-gold-50 text-gold-700',
-  bad: 'border-flare-200 bg-flare-50 text-flare-700',
-  muted: 'border-ink-900/10 bg-ink-50 text-ink-500',
-};
-
-export function AccountManager() {
-  const { account: me } = useAuth();
-  const [list, setList] = useState<Account[]>([]);
+function RequestQueue() {
+  const [requests, setRequests] = useState<AccessRequestAdmin[]>([]);
+  const [summary, setSummary] = useState<RequestSummary | null>(null);
+  const [defaultDays, setDefaultDays] = useState(30);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [creating, setCreating] = useState(false);
-  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  /** 批准后的凭据回执。口令明文只出现这一次，必须让管理员看到 */
+  const [receipt, setReceipt] = useState<{
+    username: string;
+    password: string;
+    reused: boolean;
+    body: string;
+    phone: string;
+  } | null>(null);
+  const [approving, setApproving] = useState<AccessRequestAdmin | null>(null);
+  const [approveDays, setApproveDays] = useState(30);
 
   const load = useCallback(async () => {
     setLoading(true);
-    setError('');
     try {
-      const res = await accountsApi.list();
-      setList(res.accounts);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
+      const res = await adminAccessApi.listRequests();
+      setRequests(res.requests);
+      setSummary(res.summary);
+      setDefaultDays(res.defaultDays);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载失败');
     } finally {
       setLoading(false);
     }
@@ -111,365 +95,908 @@ export function AccountManager() {
     void load();
   }, [load]);
 
-  const revoke = async (acc: Account) => {
-    const ok = window.confirm(
-      `确定要吊销账号「${acc.username}」吗？\n\n` +
-        '· 吊销后该账号立即无法登录；\n' +
-        '· 其所有已登录会话会同时失效；\n' +
-        '· 此操作不可撤销（如需恢复请重新创建账号）。'
-    );
-    if (!ok) return;
-    setBusyId(acc.id);
-    try {
-      await accountsApi.revoke(acc.id);
-      await load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setBusyId(null);
-    }
-  };
+  const pending = useMemo(() => requests.filter((r) => r.status === 'pending'), [requests]);
 
-  const activeCount = list.filter((a) => a.active).length;
+  const doApprove = useCallback(
+    async (request: AccessRequestAdmin, days: number) => {
+      try {
+        const res = await adminAccessApi.approve(request.id, { days });
+        setReceipt({
+          username: res.account.username,
+          password: res.issuedPassword,
+          reused: res.reused,
+          body: res.notification.body,
+          phone: request.phone,
+        });
+        setApproving(null);
+        await load();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : '批准失败');
+      }
+    },
+    [load]
+  );
+
+  const doReject = useCallback(
+    async (request: AccessRequestAdmin) => {
+      const note = window.prompt('驳回理由（可选，申请人看不到，仅供内部记录）：', '');
+      if (note === null) return; // 用户取消
+      try {
+        await adminAccessApi.reject(request.id, note);
+        await load();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : '驳回失败');
+      }
+    },
+    [load]
+  );
+
+  return (
+    <>
+      <Panel
+        title='临时权限申请'
+        description='申请人在登录页提交手机号；批准后该手机号即账号，系统生成 6 位随机口令。'
+        action={
+          <div className='flex items-center gap-2'>
+            <span
+              className={cn(
+                'num rounded-md px-2.5 py-1.5 text-[11px] font-medium',
+                (summary?.pending ?? 0) > 0
+                  ? 'bg-amber-50 text-amber-800'
+                  : 'bg-gray-50 text-gray-500'
+              )}
+            >
+              待审批 {summary?.pending ?? 0}
+            </span>
+            <AdminButton variant='outline' onClick={() => void load()} disabled={loading}>
+              <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+              刷新
+            </AdminButton>
+          </div>
+        }
+      >
+        {error ? (
+          <ErrorBox message={error} />
+        ) : pending.length === 0 ? (
+          <p className='py-6 text-center text-sm text-gray-400'>
+            暂无待审批的申请。申请人在登录页点「申请临时权限与账号」提交后，会出现在这里。
+          </p>
+        ) : (
+          <div className='overflow-x-auto'>
+            <table className='w-full min-w-[760px] text-sm'>
+              <thead>
+                <tr className='border-b border-gray-100 text-left text-xs text-gray-400'>
+                  <th className='pb-2 pr-4 font-medium'>手机号</th>
+                  <th className='pb-2 pr-4 font-medium'>姓名 / 单位</th>
+                  <th className='pb-2 pr-4 font-medium'>申请用途</th>
+                  <th className='pb-2 pr-4 font-medium'>提交时间</th>
+                  <th className='pb-2 font-medium'>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pending.map((r) => (
+                  <tr key={r.id} className='border-b border-gray-50 last:border-0'>
+                    <td className='py-3 pr-4'>
+                      <span className='num inline-flex items-center gap-1.5 font-medium text-gray-800'>
+                        <Phone className='h-3.5 w-3.5 text-gray-400' />
+                        {r.phone}
+                      </span>
+                    </td>
+                    <td className='py-3 pr-4 text-xs text-gray-500'>
+                      {r.name || '—'}
+                      {r.org ? <span className='block text-gray-400'>{r.org}</span> : null}
+                    </td>
+                    <td className='max-w-[220px] py-3 pr-4 text-xs text-gray-500'>
+                      <span className='line-clamp-2'>{r.reason || '—'}</span>
+                    </td>
+                    <td className='num py-3 pr-4 text-xs text-gray-400'>
+                      {formatDateTime(r.createdAt)}
+                    </td>
+                    <td className='py-3'>
+                      <div className='flex items-center gap-1.5'>
+                        <AdminButton
+                          onClick={() => {
+                            setApproving(r);
+                            setApproveDays(defaultDays);
+                          }}
+                        >
+                          <Check className='h-3.5 w-3.5' />
+                          批准
+                        </AdminButton>
+                        <AdminButton variant='ghost' onClick={() => void doReject(r)}>
+                          <X className='h-3.5 w-3.5' />
+                          驳回
+                        </AdminButton>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {summary && summary.total > pending.length ? (
+          <p className='mt-3 text-xs text-gray-400'>
+            另有 {summary.approved} 条已批准、{summary.rejected} 条已驳回（累计 {summary.total}{' '}
+            条）。
+          </p>
+        ) : null}
+      </Panel>
+
+      {/* 批准确认：选有效期 */}
+      <Modal
+        open={approving !== null}
+        title='批准临时权限申请'
+        onClose={() => setApproving(null)}
+        footer={
+          <>
+            <AdminButton variant='outline' onClick={() => setApproving(null)}>
+              取消
+            </AdminButton>
+            <AdminButton onClick={() => approving && void doApprove(approving, approveDays)}>
+              <Check className='h-3.5 w-3.5' />
+              确认批准
+            </AdminButton>
+          </>
+        }
+      >
+        {approving ? (
+          <div className='space-y-4'>
+            <div className='rounded-lg border border-brand-100 bg-brand-50/60 p-3 text-sm'>
+              <p className='text-xs text-gray-500'>将以以下手机号创建临时账号</p>
+              <p className='num mt-1 text-base font-semibold text-brand-800'>
+                {approving.phone}
+              </p>
+              {approving.name ? (
+                <p className='mt-1 text-xs text-gray-500'>
+                  申请人：{approving.name}
+                  {approving.org ? ` · ${approving.org}` : ''}
+                </p>
+              ) : null}
+            </div>
+
+            <Field label='有效期（天）' hint='到期后账号自动失效，可在「数据」面板一键延长。'>
+              <TextInput
+                type='number'
+                min={1}
+                max={3650}
+                value={approveDays}
+                onChange={(e) => setApproveDays(Number(e.target.value) || 1)}
+                className='w-40'
+              />
+            </Field>
+
+            <div className='flex flex-wrap gap-2'>
+              {[7, 30, 90, 365].map((d) => (
+                <button
+                  key={d}
+                  type='button'
+                  onClick={() => setApproveDays(d)}
+                  className={cn(
+                    'rounded-md border px-2.5 py-1 text-xs transition-colors',
+                    approveDays === d
+                      ? 'border-brand-300 bg-brand-50 text-brand-800'
+                      : 'border-gray-200 text-gray-500 hover:border-brand-200'
+                  )}
+                >
+                  {d} 天
+                </button>
+              ))}
+            </div>
+
+            <p className='text-xs text-gray-400'>
+              批准后系统生成 6 位数字口令，并生成一条短信文案放入「通知发件箱」。
+              口令只显示一次，请立刻转交申请人。
+            </p>
+          </div>
+        ) : null}
+      </Modal>
+
+      {/* 凭据回执：口令只出现这一次 */}
+      <Modal
+        open={receipt !== null}
+        title={receipt?.reused ? '权限已续期（该手机号已有账号）' : '权限已开通'}
+        onClose={() => setReceipt(null)}
+        footer={<AdminButton onClick={() => setReceipt(null)}>我已记录，关闭</AdminButton>}
+        wide
+      >
+        {receipt ? (
+          <div className='space-y-4'>
+            <div className='flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800'>
+              <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0' />
+              <p>
+                口令明文<b>只显示这一次</b>，库中只保存哈希，关闭后无法再取回。
+                {receipt.reused
+                  ? '该手机号此前已有账号，本次走的是续期路径（重置口令 + 延长有效期）。'
+                  : ''}
+              </p>
+            </div>
+
+            <div className='grid gap-3 sm:grid-cols-2'>
+              <CopyField label='账号（即手机号）' value={receipt.username} />
+              <CopyField label='随机口令' value={receipt.password} mono strong />
+            </div>
+
+            <div>
+              <p className='mb-1.5 text-xs font-medium text-gray-600'>
+                短信文案（已存入通知发件箱，请复制发送给 {receipt.phone}）
+              </p>
+              <div className='relative'>
+                <TextArea readOnly value={receipt.body} rows={3} className='bg-gray-50' />
+                <CopyButton
+                  text={receipt.body}
+                  className='absolute right-2 top-2'
+                  label='复制文案'
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+    </>
+  );
+}
+
+/* ───────────────────────── 2. 临时账号 ───────────────────────── */
+
+function TempAccounts() {
+  const [viewers, setViewers] = useState<Account[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [tick, setTick] = useState(0);
+  /** 重置后的新口令回执 */
+  const [resetReceipt, setResetReceipt] = useState<{
+    username: string;
+    password: string;
+    revokedSessions: number;
+  } | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await accountsApi.list();
+      setViewers(res.accounts.filter((a) => a.role === 'viewer'));
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  // 每秒自增，驱动剩余时长倒计时重算
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((t) => t + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const reset = useCallback(
+    async (account: Account) => {
+      const ok = window.confirm(
+        `重置「${account.username}」的权限？\n\n` +
+          '· 将生成一个新的 6 位随机口令，旧口令立即失效；\n' +
+          '· 该账号的全部已登录会话会被清空（拿到旧 Cookie 的人立刻掉线）。\n\n继续？'
+      );
+      if (!ok) return;
+      setBusyId(account.id);
+      try {
+        const res = await accountsApi.reset(account.id);
+        setResetReceipt({
+          username: account.username,
+          password: res.issuedPassword,
+          revokedSessions: res.revokedSessions,
+        });
+        await load();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : '重置失败');
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [load]
+  );
+
+  const extend = useCallback(
+    async (account: Account, days: number) => {
+      setBusyId(account.id);
+      try {
+        await accountsApi.extend(account.id, days);
+        await load();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : '延长失败');
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [load]
+  );
+
+  const revoke = useCallback(
+    async (account: Account) => {
+      const ok = window.confirm(
+        `吊销「${account.username}」？\n\n吊销后该账号立即无法登录，且其会话全部失效。此操作不可撤销。`
+      );
+      if (!ok) return;
+      setBusyId(account.id);
+      try {
+        await accountsApi.revoke(account.id);
+        await load();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : '吊销失败');
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [load]
+  );
+
+  return (
+    <>
+      <Panel
+        title='已运行的临时权限账号'
+        description='按到期时间升序排列；已过期的以红字标示，可一键延长或重置权限。'
+        action={
+          <AdminButton variant='outline' onClick={() => void load()} disabled={loading}>
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+            刷新
+          </AdminButton>
+        }
+      >
+        {error ? (
+          <ErrorBox message={error} />
+        ) : viewers.length === 0 ? (
+          <p className='py-6 text-center text-sm text-gray-400'>暂无临时访客账号。</p>
+        ) : (
+          <div className='overflow-x-auto'>
+            <table className='w-full min-w-[860px] text-sm'>
+              <thead>
+                <tr className='border-b border-gray-100 text-left text-xs text-gray-400'>
+                  <th className='pb-2 pr-4 font-medium'>账号</th>
+                  <th className='pb-2 pr-4 font-medium'>来源</th>
+                  <th className='pb-2 pr-4 font-medium'>剩余权限时长</th>
+                  <th className='pb-2 pr-4 font-medium'>到期时间</th>
+                  <th className='pb-2 font-medium'>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {viewers.map((a) => (
+                  <tr key={a.id} className='border-b border-gray-50 last:border-0'>
+                    <td className='py-3 pr-4'>
+                      <span className='num font-medium text-gray-800'>{a.username}</span>
+                      {a.displayName ? (
+                        <span className='block text-xs text-gray-400'>{a.displayName}</span>
+                      ) : null}
+                    </td>
+                    <td className='py-3 pr-4'>
+                      <SourceTag source={a.source} />
+                    </td>
+                    <td className='py-3 pr-4'>
+                      <RemainCell account={a} tick={tick} />
+                    </td>
+                    <td className='num py-3 pr-4 text-xs text-gray-400'>
+                      {formatDateTime(a.expiresAt)}
+                    </td>
+                    <td className='py-3'>
+                      <div className='flex flex-wrap items-center gap-1.5'>
+                        <AdminButton
+                          variant='outline'
+                          onClick={() => void extend(a, 30)}
+                          disabled={busyId === a.id}
+                          title='在当前到期时间基础上追加 30 天'
+                        >
+                          <Clock className='h-3.5 w-3.5' />
+                          延长权限
+                        </AdminButton>
+                        <AdminButton
+                          variant='outline'
+                          onClick={() => void reset(a)}
+                          disabled={busyId === a.id}
+                          title='生成新口令并清空该账号的全部会话'
+                        >
+                          <KeyRound className='h-3.5 w-3.5' />
+                          重置权限
+                        </AdminButton>
+                        {!a.revokedAt ? (
+                          <AdminButton
+                            variant='ghost'
+                            onClick={() => void revoke(a)}
+                            disabled={busyId === a.id}
+                            title='立即吊销（不可撤销）'
+                          >
+                            <Ban className='h-3.5 w-3.5' />
+                            吊销
+                          </AdminButton>
+                        ) : (
+                          <span className='rounded bg-gray-100 px-2 py-1 text-[10px] text-gray-500'>
+                            已吊销
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
+      <Modal
+        open={resetReceipt !== null}
+        title='权限已重置'
+        onClose={() => setResetReceipt(null)}
+        footer={<AdminButton onClick={() => setResetReceipt(null)}>我已记录，关闭</AdminButton>}
+      >
+        {resetReceipt ? (
+          <div className='space-y-4'>
+            <div className='flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800'>
+              <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0' />
+              <p>
+                新口令<b>只显示这一次</b>。已清空该账号的 {resetReceipt.revokedSessions}{' '}
+                个旧会话 —— 之前拿到 Cookie 的人已立即掉线。
+              </p>
+            </div>
+            <div className='grid gap-3 sm:grid-cols-2'>
+              <CopyField label='账号' value={resetReceipt.username} />
+              <CopyField label='新口令' value={resetReceipt.password} mono strong />
+            </div>
+            <p className='text-xs text-gray-400'>
+              请把新口令转交访客本人；旧口令立刻失效，无法找回。
+            </p>
+          </div>
+        ) : null}
+      </Modal>
+    </>
+  );
+}
+
+/* ───────────────────────── 3. 通知发件箱 ───────────────────────── */
+
+function NotificationOutbox() {
+  const [items, setItems] = useState<NotificationItem[]>([]);
+  const [summary, setSummary] = useState<NotificationSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await adminAccessApi.listNotifications();
+      setItems(res.notifications);
+      setSummary(res.summary);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '加载失败');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const markSent = useCallback(
+    async (id: number) => {
+      setBusyId(id);
+      try {
+        await adminAccessApi.markNotificationSent(id);
+        await load();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : '操作失败');
+      } finally {
+        setBusyId(null);
+      }
+    },
+    [load]
+  );
 
   return (
     <Panel
-      title='账号管理'
-      description='管理权限账号供社团成员共用；临时浏览账号到期自动作废，适合新进成员与外部合作者。'
+      title='通知发件箱'
+      description='站点尚未接入短信网关，通知在此生成；请复制文案发送给申请人后标记为已发送。'
       action={
         <div className='flex items-center gap-2'>
-          <span className='num rounded-md border border-ink-900/10 bg-ink-50 px-2 py-1 text-[11px] text-ink-500'>
-            {activeCount} 个有效 / 共 {list.length} 个
+          <span
+            className={cn(
+              'num rounded-md px-2.5 py-1.5 text-[11px] font-medium',
+              (summary?.pending ?? 0) > 0
+                ? 'bg-amber-50 text-amber-800'
+                : 'bg-gray-50 text-gray-500'
+            )}
+          >
+            待发送 {summary?.pending ?? 0}
           </span>
           <AdminButton variant='outline' onClick={() => void load()} disabled={loading}>
-            <RefreshCw className={loading ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
             刷新
-          </AdminButton>
-          <AdminButton onClick={() => setCreating(true)}>
-            <UserPlus className='h-3.5 w-3.5' />
-            新建账号
           </AdminButton>
         </div>
       }
     >
       {error ? (
-        <div className='mb-4 flex items-start gap-2 rounded-lg border border-flare-200 bg-flare-50 p-3'>
-          <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0 text-flare-600' />
-          <p className='text-xs leading-relaxed text-flare-700'>{error}</p>
-        </div>
-      ) : null}
-
-      {loading && list.length === 0 ? (
-        <div className='flex items-center gap-2 py-10 text-sm text-ink-400'>
-          <Loader2 className='h-4 w-4 animate-spin' />
-          正在加载账号列表…
-        </div>
-      ) : list.length === 0 ? (
-        <p className='rounded-xl border border-dashed border-ink-900/12 px-6 py-10 text-center text-sm text-ink-400'>
-          暂无账号。
+        <ErrorBox message={error} />
+      ) : items.length === 0 ? (
+        <p className='py-6 text-center text-sm text-gray-400'>
+          暂无通知记录。批准权限申请后，短信文案会自动出现在这里。
         </p>
       ) : (
-        <div className='overflow-x-auto'>
-          <table className='w-full text-left text-sm'>
-            <thead>
-              <tr className='border-b border-ink-900/10 text-xs text-ink-400'>
-                <th className='pb-2.5 pr-4 font-medium'>账号</th>
-                <th className='pb-2.5 pr-4 font-medium'>角色</th>
-                <th className='pb-2.5 pr-4 font-medium'>有效期</th>
-                <th className='pb-2.5 pr-4 font-medium'>状态</th>
-                <th className='pb-2.5 pr-4 font-medium'>备注</th>
-                <th className='pb-2.5 text-right font-medium'>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {list.map((acc) => {
-                const exp = expiryText(acc);
-                const isMe = me?.id === acc.id;
-                return (
-                  <tr key={acc.id} className='border-b border-ink-900/[0.06] last:border-0'>
-                    <td className='py-3 pr-4'>
-                      <div className='font-medium text-ink-900'>{acc.displayName || acc.username}</div>
-                      <div className='num text-[11px] text-ink-400'>@{acc.username}</div>
-                    </td>
-                    <td className='py-3 pr-4'>
-                      <span
-                        className={`num inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] ${
-                          acc.role === 'admin'
-                            ? 'border-brand-200 bg-brand-50 text-brand-700'
-                            : 'border-gold-200 bg-gold-50 text-gold-700'
-                        }`}
-                      >
-                        {acc.role === 'admin' ? (
-                          <ShieldCheck className='h-3 w-3' />
-                        ) : (
-                          <KeyRound className='h-3 w-3' />
-                        )}
-                        {acc.role === 'admin' ? '管理权限' : '临时浏览'}
-                      </span>
-                    </td>
-                    <td className='py-3 pr-4'>
-                      <span className={`num rounded-md border px-2 py-1 text-[11px] ${TONE_CLASS[exp.tone]}`}>
-                        {exp.text}
-                      </span>
-                    </td>
-                    <td className='py-3 pr-4'>
-                      {acc.active ? (
-                        <span className='inline-flex items-center gap-1 text-xs text-brand-600'>
-                          <Check className='h-3.5 w-3.5' />
-                          可用
-                        </span>
-                      ) : (
-                        <span className='inline-flex items-center gap-1 text-xs text-flare-600'>
-                          <X className='h-3.5 w-3.5' />
-                          {acc.revokedAt ? '已吊销' : '已过期'}
-                        </span>
-                      )}
-                    </td>
-                    <td className='max-w-[16rem] py-3 pr-4 text-xs text-ink-500'>
-                      {acc.note || '—'}
-                    </td>
-                    <td className='py-3 text-right'>
-                      {acc.active ? (
-                        <AdminButton
-                          variant='ghost'
-                          onClick={() => void revoke(acc)}
-                          disabled={busyId === acc.id || isMe}
-                          title={isMe ? '不能吊销当前登录的账号' : '吊销该账号'}
-                        >
-                          {busyId === acc.id ? (
-                            <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                          ) : (
-                            <Ban className='h-3.5 w-3.5' />
-                          )}
-                          {isMe ? '当前账号' : '吊销'}
-                        </AdminButton>
-                      ) : (
-                        <span className='text-xs text-ink-300'>—</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <ul className='divide-y divide-gray-50'>
+          {items.map((n) => (
+            <li key={n.id} className='py-3.5'>
+              <div className='flex flex-wrap items-start justify-between gap-3'>
+                <div className='min-w-0 flex-1'>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <span className='num inline-flex items-center gap-1.5 text-sm font-medium text-gray-800'>
+                      <Phone className='h-3.5 w-3.5 text-gray-400' />
+                      {n.to}
+                    </span>
+                    <StatusTag status={n.status} />
+                    <span className='num text-xs text-gray-400'>
+                      {formatDateTime(n.createdAt)}
+                    </span>
+                  </div>
+                  <p className='mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600'>
+                    {n.body}
+                  </p>
+                </div>
+                <div className='flex shrink-0 items-center gap-1.5'>
+                  <CopyButton text={n.body} label='复制' />
+                  {n.status === 'pending' ? (
+                    <AdminButton
+                      variant='outline'
+                      onClick={() => void markSent(n.id)}
+                      disabled={busyId === n.id}
+                    >
+                      <BellRing className='h-3.5 w-3.5' />
+                      标记已发送
+                    </AdminButton>
+                  ) : null}
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
       )}
-
-      <CreateAccountModal
-        open={creating}
-        onClose={() => setCreating(false)}
-        onCreated={() => {
-          setCreating(false);
-          void load();
-        }}
-      />
     </Panel>
   );
 }
 
-/** 新建账号弹窗 */
-function CreateAccountModal({
-  open,
-  onClose,
-  onCreated,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [form, setForm] = useState<CreateAccountInput>({
-    username: '',
-    password: suggestPassword(),
-    role: 'viewer',
-    displayName: '',
-    note: '',
-    expiresAt: defaultExpiry(30),
-  });
+/* ───────────────────────── 4. 手工建号（原有能力，保留） ───────────────────────── */
+
+function suggestPassword(): string {
+  const upper = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+  const lower = 'abcdefghijkmnopqrstuvwxyz';
+  const digits = '23456789';
+  const all = upper + lower + digits + '!@#$%^&*';
+  const pick = (s: string) => s[Math.floor(Math.random() * s.length)];
+  let out = pick(upper) + pick(lower) + pick(digits);
+  for (let i = 0; i < 9; i += 1) out += pick(all);
+  return out;
+}
+
+const emptyForm = (): CreateAccountInput => ({
+  username: '',
+  password: '',
+  role: 'viewer',
+  displayName: '',
+  note: '',
+  expiresAt: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10),
+});
+
+function CreateAccount() {
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState<CreateAccountInput>(emptyForm);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  /** 创建成功后的凭据回执，只展示一次 */
-  const [issued, setIssued] = useState<{ username: string; password: string; role: Role } | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [issued, setIssued] = useState<{ username: string; password: string } | null>(null);
 
-  const isViewer = form.role === 'viewer';
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (busy) return;
+  const submit = async () => {
     setBusy(true);
-    setError('');
     try {
-      // datetime-local 给的是本地时间字符串，转成 ISO 再发，
-      // 否则后端按 UTC 解析会差几个时区，临时账号的到期时刻就不对了。
-      const payload: CreateAccountInput = {
-        username: form.username.trim(),
-        password: form.password,
-        role: form.role,
-        displayName: form.displayName?.trim() || undefined,
-        note: form.note?.trim() || undefined,
-      };
-      if (isViewer && form.expiresAt) {
-        payload.expiresAt = new Date(form.expiresAt).toISOString();
+      const input: CreateAccountInput = { ...form };
+      // viewer 必须带到期时间（后端强制），这里把日期转成 ISO 瞬间
+      if (input.role === 'viewer' && input.expiresAt) {
+        input.expiresAt = new Date(`${input.expiresAt}T23:59:59`).toISOString();
       }
-      await accountsApi.create(payload);
-      setIssued({ username: payload.username, password: payload.password, role: payload.role });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
+      await accountsApi.create(input);
+      setIssued({ username: input.username, password: input.password ?? '' });
+      setOpen(false);
+      setForm(emptyForm());
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : '创建失败');
     } finally {
       setBusy(false);
     }
   };
 
-  // 创建成功后的凭据回执页：口令只在这一刻可见，之后无法再取回
-  if (issued) {
-    const text = `账号：${issued.username}\n口令：${issued.password}\n角色：${
-      issued.role === 'admin' ? '管理权限' : '临时浏览权限'
-    }`;
-    return (
-      <Modal open={open} title='账号创建成功' onClose={onCreated}>
-        <div className='rounded-lg border border-gold-200 bg-gold-50 p-3'>
-          <p className='text-xs leading-relaxed text-gold-800'>
-            <strong>请立即复制并转交给使用者。</strong>
-            出于安全考虑，服务端只保存口令的哈希值，此口令<strong>关闭后无法再次查看</strong>，
-            遗失只能重新设置。
-          </p>
-        </div>
-
-        <div className='mt-4 space-y-2 rounded-lg border border-ink-900/10 bg-ink-50 p-4'>
-          <div className='flex items-center justify-between gap-3'>
-            <span className='text-xs text-ink-500'>账号</span>
-            <span className='num text-sm font-medium text-ink-900'>{issued.username}</span>
-          </div>
-          <div className='flex items-center justify-between gap-3'>
-            <span className='text-xs text-ink-500'>口令</span>
-            <span className='num select-all text-sm font-medium text-ink-900'>{issued.password}</span>
-          </div>
-          <div className='flex items-center justify-between gap-3'>
-            <span className='text-xs text-ink-500'>角色</span>
-            <span className='text-sm font-medium text-ink-900'>
-              {issued.role === 'admin' ? '管理权限' : '临时浏览权限'}
-            </span>
-          </div>
-        </div>
-
-        <div className='mt-5 flex items-center gap-2'>
-          <AdminButton
-            onClick={() => {
-              void navigator.clipboard?.writeText(text).then(
-                () => {
-                  setCopied(true);
-                  setTimeout(() => setCopied(false), 2000);
-                },
-                () => setCopied(false)
-              );
-            }}
-          >
-            {copied ? <Check className='h-3.5 w-3.5' /> : <Copy className='h-3.5 w-3.5' />}
-            {copied ? '已复制' : '复制凭据'}
-          </AdminButton>
-          <AdminButton variant='outline' onClick={onCreated}>
-            完成
-          </AdminButton>
-        </div>
-      </Modal>
-    );
-  }
-
   return (
-    <Modal open={open} title='新建账号' onClose={onClose}>
-      <form onSubmit={submit} className='space-y-4'>
-        <Field label='账号' hint='建议使用英文与数字，长度 3 位以上'>
-          <TextInput
-            value={form.username}
-            onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
-            placeholder='例如：member2026'
-            autoComplete='off'
-            spellCheck={false}
-          />
-        </Field>
+    <>
+      <Panel
+        title='手工创建账号'
+        description='适用于线下已知成员的场景；来自手机号申请的账号请用上方「批准」流程。'
+        action={
+          <AdminButton onClick={() => setOpen(true)}>
+            <Plus className='h-3.5 w-3.5' />
+            新建账号
+          </AdminButton>
+        }
+      >
+        <p className='text-xs text-gray-400'>
+          临时浏览账号必须设置到期时间 —— 「过期自动作废」是这套权限体系的关键约束。
+        </p>
+      </Panel>
 
-        <Field label='口令' hint='至少 8 位，需包含字母与数字；可点击右侧重新生成'>
-          <div className='flex items-center gap-2'>
-            <TextInput
-              value={form.password}
-              onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-              autoComplete='new-password'
-              spellCheck={false}
-            />
-            <AdminButton
-              type='button'
-              variant='outline'
-              onClick={() => setForm((f) => ({ ...f, password: suggestPassword() }))}
-            >
-              <RefreshCw className='h-3.5 w-3.5' />
-              重新生成
+      <Modal
+        open={open}
+        title='新建账号'
+        onClose={() => setOpen(false)}
+        footer={
+          <>
+            <AdminButton variant='outline' onClick={() => setOpen(false)}>
+              取消
             </AdminButton>
+            <AdminButton onClick={() => void submit()} disabled={busy}>
+              <UserPlus className='h-3.5 w-3.5' />
+              创建
+            </AdminButton>
+          </>
+        }
+      >
+        <div className='space-y-4'>
+          <div className='grid gap-4 sm:grid-cols-2'>
+            <Field label='账号' hint='3-32 位字母、数字、点、下划线或连字符'>
+              <TextInput
+                value={form.username}
+                onChange={(e) => setForm({ ...form, username: e.target.value })}
+                placeholder='如 13800138000'
+              />
+            </Field>
+            <Field label='角色'>
+              <SelectInput
+                value={form.role}
+                onChange={(e) =>
+                  setForm({ ...form, role: e.target.value as CreateAccountInput['role'] })
+                }
+              >
+                <option value='viewer'>临时浏览权限（到期作废）</option>
+                <option value='admin'>管理权限</option>
+              </SelectInput>
+            </Field>
           </div>
-        </Field>
 
-        <Field label='角色' hint='管理权限可进入后台并管理账号；临时浏览权限到期自动作废'>
-          <SelectInput
-            value={form.role}
-            onChange={(e) => setForm((f) => ({ ...f, role: e.target.value as Role }))}
-          >
-            <option value='viewer'>临时浏览权限</option>
-            <option value='admin'>管理权限</option>
-          </SelectInput>
-        </Field>
+          <Field label='口令' hint='至少 8 位；留空则由浏览器生成一个强口令'>
+            <div className='flex gap-2'>
+              <TextInput
+                value={form.password ?? ''}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                placeholder='至少 8 位'
+              />
+              <AdminButton
+                variant='outline'
+                onClick={() => setForm({ ...form, password: suggestPassword() })}
+              >
+                随机生成
+              </AdminButton>
+            </div>
+          </Field>
 
-        {isViewer ? (
-          <Field label='到期时间' hint='到期后该账号自动失效，无需手动清理'>
-            <input
-              type='datetime-local'
-              value={form.expiresAt ?? ''}
-              onChange={(e) => setForm((f) => ({ ...f, expiresAt: e.target.value }))}
-              className='h-10 w-full rounded-md border border-ink-900/12 bg-white px-3 text-sm text-ink-900 outline-none transition-colors focus:border-brand-400'
+          <div className='grid gap-4 sm:grid-cols-2'>
+            <Field label='姓名 / 称呼'>
+              <TextInput
+                value={form.displayName ?? ''}
+                onChange={(e) => setForm({ ...form, displayName: e.target.value })}
+                placeholder='用于后台识别'
+              />
+            </Field>
+            <Field label='到期时间' hint='仅临时浏览权限需要'>
+              <TextInput
+                type='date'
+                value={form.expiresAt ?? ''}
+                onChange={(e) => setForm({ ...form, expiresAt: e.target.value })}
+                disabled={form.role === 'admin'}
+              />
+            </Field>
+          </div>
+
+          <Field label='备注'>
+            <TextArea
+              rows={2}
+              value={form.note ?? ''}
+              onChange={(e) => setForm({ ...form, note: e.target.value })}
+              placeholder='如：应 XX 老师要求开通'
             />
           </Field>
-        ) : (
-          <div className='flex items-start gap-2 rounded-lg border border-brand-200 bg-brand-50 p-3'>
-            <ShieldCheck className='mt-0.5 h-4 w-4 shrink-0 text-brand-600' />
-            <p className='text-xs leading-relaxed text-brand-700'>
-              管理权限账号默认长期有效。请仅在确有必要时创建，并妥善保管口令。
-            </p>
-          </div>
-        )}
+        </div>
+      </Modal>
 
-        <Field label='显示名称' hint='选填，用于后台识别使用者'>
-          <TextInput
-            value={form.displayName ?? ''}
-            onChange={(e) => setForm((f) => ({ ...f, displayName: e.target.value }))}
-            placeholder='例如：外联部 · 张三'
-          />
-        </Field>
-
-        <Field label='备注' hint='选填，例如开通原因、对接人'>
-          <TextInput
-            value={form.note ?? ''}
-            onChange={(e) => setForm((f) => ({ ...f, note: e.target.value }))}
-            placeholder='例如：合作单位数据组，用于查阅公开资料'
-          />
-        </Field>
-
-        {error ? (
-          <div className='flex items-start gap-2 rounded-lg border border-flare-200 bg-flare-50 p-3'>
-            <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0 text-flare-600' />
-            <p className='text-xs leading-relaxed text-flare-700'>{error}</p>
+      <Modal
+        open={issued !== null}
+        title='账号已创建'
+        onClose={() => setIssued(null)}
+        footer={<AdminButton onClick={() => setIssued(null)}>我已记录，关闭</AdminButton>}
+      >
+        {issued ? (
+          <div className='space-y-4'>
+            <div className='flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800'>
+              <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0' />
+              <p>口令明文只显示这一次，请立刻转交本人。</p>
+            </div>
+            <CopyField label='账号' value={issued.username} />
+            <CopyField label='口令' value={issued.password} mono strong />
           </div>
         ) : null}
-
-        <div className='flex items-center gap-2 pt-1'>
-          <AdminButton type='submit' disabled={busy || !form.username.trim() || !form.password}>
-            {busy ? <Loader2 className='h-3.5 w-3.5 animate-spin' /> : <Plus className='h-3.5 w-3.5' />}
-            {busy ? '创建中…' : '创建账号'}
-          </AdminButton>
-          <AdminButton type='button' variant='ghost' onClick={onClose}>
-            取消
-          </AdminButton>
-        </div>
-      </form>
-    </Modal>
+      </Modal>
+    </>
   );
 }
 
-export default AccountManager;
+/* ───────────────────────── 小组件 ───────────────────────── */
+
+function RemainCell({ account, tick }: { account: Account; tick: number }) {
+  void tick;
+  if (account.revokedAt) {
+    return (
+      <span className='inline-flex items-center gap-1 text-xs font-medium text-gray-400'>
+        <ShieldCheck className='h-3.5 w-3.5' />
+        已吊销
+      </span>
+    );
+  }
+  if (!account.active) {
+    return (
+      <span className='inline-flex items-center gap-1 text-xs font-semibold text-red-600'>
+        <Clock className='h-3.5 w-3.5' />
+        已过期
+      </span>
+    );
+  }
+  return (
+    <span className='num inline-flex items-center gap-1 text-xs font-medium text-emerald-700'>
+      <Clock className='h-3.5 w-3.5' />
+      {remainText(account.expiresAt)}
+    </span>
+  );
+}
+
+function SourceTag({ source }: { source?: string }) {
+  const map: Record<string, { label: string; cls: string }> = {
+    application: { label: '手机号申请', cls: 'bg-brand-50 text-brand-700' },
+    manual: { label: '手工创建', cls: 'bg-gray-100 text-gray-600' },
+    seed: { label: '内置演示', cls: 'bg-gold-50 text-gold-700' },
+  };
+  const hit = source ? map[source] : null;
+  return (
+    <span
+      className={cn(
+        'rounded px-2 py-0.5 text-[10px] font-medium',
+        hit?.cls ?? 'bg-gray-100 text-gray-500'
+      )}
+    >
+      {hit?.label ?? source ?? '未知'}
+    </span>
+  );
+}
+
+function StatusTag({ status }: { status: 'pending' | 'sent' | 'failed' }) {
+  const map = {
+    pending: { label: '待发送', cls: 'bg-amber-50 text-amber-800' },
+    sent: { label: '已发送', cls: 'bg-emerald-50 text-emerald-700' },
+    failed: { label: '发送失败', cls: 'bg-red-50 text-red-700' },
+  } as const;
+  const hit = map[status];
+  return (
+    <span className={cn('rounded px-2 py-0.5 text-[10px] font-medium', hit.cls)}>
+      {hit.label}
+    </span>
+  );
+}
+
+function CopyField({
+  label,
+  value,
+  mono,
+  strong,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+  strong?: boolean;
+}) {
+  return (
+    <div>
+      <p className='mb-1 text-xs text-gray-500'>{label}</p>
+      <div className='flex items-center gap-2 rounded-md border border-gray-200 bg-gray-50 px-3 py-2'>
+        <span
+          className={cn(
+            'num flex-1 select-all truncate',
+            mono && 'font-mono',
+            strong ? 'text-base font-semibold text-brand-800' : 'text-sm text-gray-800'
+          )}
+        >
+          {value}
+        </span>
+        <CopyButton text={value} label='' />
+      </div>
+    </div>
+  );
+}
+
+function CopyButton({
+  text,
+  label,
+  className,
+}: {
+  text: string;
+  label: string;
+  className?: string;
+}) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type='button'
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setDone(true);
+          window.setTimeout(() => setDone(false), 1600);
+        } catch {
+          // 剪贴板不可用（非安全上下文 / 权限被拒）时退到手工复制
+          window.prompt('自动复制失败，请手动复制：', text);
+        }
+      }}
+      className={cn(
+        'inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-500 transition-colors hover:border-brand-300 hover:text-brand-700',
+        className
+      )}
+    >
+      {done ? <Check className='h-3 w-3' /> : <Copy className='h-3 w-3' />}
+      {label ? (done ? '已复制' : label) : null}
+    </button>
+  );
+}
+
+function ErrorBox({ message }: { message: string }) {
+  return (
+    <div className='flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700'>
+      <AlertTriangle className='mt-0.5 h-4 w-4 shrink-0' />
+      <div>
+        <p className='font-medium'>加载失败</p>
+        <p className='mt-1 text-xs'>{message}</p>
+      </div>
+    </div>
+  );
+}
+
+/* ───────────────────────── 工具 ───────────────────────── */
+
+function remainText(expiresAt: string | null): string {
+  if (!expiresAt) return '长期有效';
+  const ms = new Date(expiresAt).getTime() - Date.now();
+  if (ms <= 0) return '已过期';
+  const sec = Math.floor(ms / 1000);
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (d > 0) return `${d} 天 ${h} 小时`;
+  if (h > 0) return `${h} 小时 ${m} 分`;
+  if (m > 0) return `${m} 分 ${s} 秒`;
+  return `${s} 秒`;
+}
+
+function formatDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  const pad = (v: number) => String(v).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
+}

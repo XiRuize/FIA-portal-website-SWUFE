@@ -31,6 +31,12 @@
  */
 
 /**
+ * 东八区自然日工具。放在文件顶部而非末尾：ESM 的 import 会被提升，
+ * 位置不影响语义，但写在最前面可以避免读者以为这个标识符是局部定义的。
+ */
+import { bucketDate } from './day.js';
+
+/**
  * 东方财富·文章列表接口**基址**（不含 column）。
  *
  * ⚠️ 实测约束：该接口 `pageSize` 与分页参数（`pageIndex` / `page` / `p` / `offset`）
@@ -184,12 +190,14 @@ const FINANCE_MEDIA =
  * 财经时事的「每日 10 条」按国内读者的日历划分，因此不能用 UTC 日期，
  * 否则 0:00–8:00 期间会分到前一天。
  *
+ * 实现已移到 `lib/day.js`（浏览量统计也要用同一口径）。这里**先 import 再 export**，
+ * 不能写成 `export { bucketDate } from './day.js'` —— 那种写法只做转发，
+ * 不会在本模块里建立本地绑定，而本文件内部多处调用 `bucketDate`，
+ * 会立刻炸成 ReferenceError。
+ *
  * @param {Date} [date]
  */
-export function bucketDate(date = new Date()) {
-  const shanghai = new Date(date.getTime() + 8 * 3600_000);
-  return shanghai.toISOString().slice(0, 10);
-}
+export { bucketDate };
 
 /** 统一的带超时 fetch（零依赖，用内置 AbortSignal.timeout） */
 async function fetchWithTimeout(url, init = {}) {

@@ -80,8 +80,9 @@ export function createAccountService(db, config) {
     insert: db.prepare(`
       INSERT INTO accounts
         (username, password_hash, role, display_name, note, expires_at, revoked_at,
-         last_login_at, created_at, created_by, updated_at, password_changed_at)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+         last_login_at, created_at, created_by, updated_at, password_changed_at,
+         source, phone)
+      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?)
     `),
     touchLogin: db.prepare(
       'UPDATE accounts SET last_login_at = ?, updated_at = ? WHERE id = ?'
@@ -89,8 +90,25 @@ export function createAccountService(db, config) {
     setPassword: db.prepare(
       'UPDATE accounts SET password_hash = ?, password_changed_at = ?, updated_at = ? WHERE id = ?'
     ),
+    /** 重置口令 + 计一次重置次数（后台「一键重置权限」用） */
+    resetPassword: db.prepare(`
+      UPDATE accounts
+         SET password_hash = ?, password_changed_at = ?, updated_at = ?,
+             reset_count = reset_count + 1
+       WHERE id = ?
+    `),
+    /** 延长到期时间 + 计一次延长次数（后台「一键延长权限」用） */
+    extendExpiry: db.prepare(`
+      UPDATE accounts
+         SET expires_at = ?, updated_at = ?, extended_count = extended_count + 1
+       WHERE id = ?
+    `),
     revoke: db.prepare(
       'UPDATE accounts SET revoked_at = ?, updated_at = ? WHERE id = ?'
+    ),
+    /** 解除吊销（批准申请时若发现同号账号曾被吊销，需要先恢复才谈得上续期） */
+    reactivate: db.prepare(
+      'UPDATE accounts SET revoked_at = NULL, updated_at = ? WHERE id = ?'
     ),
     listAll: db.prepare(
       'SELECT * FROM accounts ORDER BY role DESC, created_at DESC'
@@ -143,9 +161,32 @@ export function createAccountService(db, config) {
         ? String(row.password_changed_at)
         : null,
       expired,
+      /** 是否仍然可用（未吊销且未过期）—— 列表据此决定显示「可用 / 已过期 / 已吊销」 */
+      active: isUsable(row),
+      /** 剩余有效秒数；无到期时间为 null，已过期为 0（负数一律夹到 0） */
+      remainingSec: remainingSeconds(row),
+      /** 账号来源：seed / manual / application */
+      source: String(row.source ?? 'manual'),
+      phone: String(row.phone ?? ''),
+      extendedCount: Number(row.extended_count ?? 0),
+      resetCount: Number(row.reset_count ?? 0),
       capabilities: capabilityKeys(caps),
       roleLabel: caps.label,
     };
+  }
+
+  /**
+   * 距到期的剩余秒数。
+   *
+   * 单独抽出来是因为前端要拿它做倒计时，而「已过期」和「永不过期」必须
+   * 区分开：前者应显示红字「已过期」，后者（管理账号）显示「长期有效」。
+   *
+   * @returns {number | null} null = 无到期时间；否则为剩余秒数（已过期为 0）
+   */
+  function remainingSeconds(row) {
+    if (!row?.expires_at) return null;
+    const ms = new Date(String(row.expires_at)).getTime() - Date.now();
+    return ms <= 0 ? 0 : Math.floor(ms / 1000);
   }
 
   /** 临时账号是否已过期 */
@@ -229,6 +270,7 @@ export function createAccountService(db, config) {
   return {
     isExpired,
     isUsable,
+    remainingSeconds,
     toPublicAccount,
     attemptScopes,
     checkLock,
@@ -375,8 +417,31 @@ export function createAccountService(db, config) {
       return { ok: true };
     },
 
-    /** 管理员创建账号（临时账号必须带过期时间） */
-    async createAccount({ username, password, role, displayName, note, expiresAt, createdBy }) {
+    /**
+     * 管理员创建账号（临时账号必须带过期时间）。
+     *
+     * @param {{ username: string, password: string, role: string, displayName?: string,
+     *   note?: string, expiresAt?: string|null, createdBy?: string,
+     *   source?: 'seed'|'manual'|'application', phone?: string,
+     *   allowGeneratedNumeric?: boolean }} input
+     *   `allowGeneratedNumeric` 仅供「批准申请时下发 6 位随机口令」使用 ——
+     *   见 `password.js` 的 `generateNumericPassword`，不要从其它地方传 true。
+     */
+    async createAccount({
+      username,
+      password,
+      role,
+      displayName,
+      note,
+      expiresAt,
+      createdBy,
+      source = 'manual',
+      phone = '',
+      allowGeneratedNumeric = false,
+    }) {
+      // ⚠️ 手机号当账号名：11 位纯数字，通过下面前缀校验是**刻意**的。
+      //    正则本身不允许空格、`@`、路径符号，因此它同时挡住了
+      //    「拿手机号字段塞奇怪东西当账号名」这条路。
       const uname = String(username ?? '').trim();
       if (!/^[A-Za-z0-9._-]{3,32}$/.test(uname)) {
         return {
@@ -388,7 +453,7 @@ export function createAccountService(db, config) {
       if (![ROLE_ADMIN, ROLE_VIEWER].includes(role)) {
         return { ok: false, code: 'INVALID_ROLE', message: '角色只能是 admin 或 viewer' };
       }
-      const strength = checkPasswordStrength(password);
+      const strength = checkPasswordStrength(password, { allowGeneratedNumeric });
       if (!strength.ok) return { ok: false, code: 'WEAK_PASSWORD', message: strength.reason };
 
       if (role === ROLE_VIEWER) {
@@ -415,10 +480,72 @@ export function createAccountService(db, config) {
         now,
         String(createdBy ?? 'system'),
         now,
-        now
+        now,
+        String(source ?? 'manual'),
+        String(phone ?? '')
       );
       const row = this.findRawById(Number(info.lastInsertRowid));
       return { ok: true, account: toPublicAccount(row) };
+    },
+
+    /**
+     * 延长临时账号的有效期（后台「一键延长权限」）。
+     *
+     * 语义是**续期而不是重置**：从 `max(现在, 原到期时间)` 往后加 N 天。
+     * 若从「现在」起算，一个还剩 20 天的账号被延长 30 天会变成只剩 30 天 ——
+     * 管理员以为在帮忙，实际把对方的权限砍掉了一部分。这是很容易踩的坑。
+     *
+     * @param {{ id: number, days: number }} input
+     */
+    extendAccount({ id, days }) {
+      const row = this.findRawById(id);
+      if (!row) return { ok: false, code: 'NOT_FOUND', message: '账号不存在' };
+      if (row.revoked_at) {
+        return { ok: false, code: 'ACCOUNT_REVOKED', message: '该账号已被吊销，无法延长' };
+      }
+      const numDays = Number(days);
+      if (!Number.isFinite(numDays) || numDays <= 0 || numDays > 3650) {
+        return { ok: false, code: 'INVALID_DAYS', message: '延长天数需为 1–3650 之间的整数' };
+      }
+      if (!row.expires_at) {
+        return {
+          ok: false,
+          code: 'NO_EXPIRY',
+          message: '该账号为长期有效账号，无需延长',
+        };
+      }
+
+      // 已过期 → 从当前时刻起算；未过期 → 从原到期时间起算（真正的「续期」）
+      const base = Math.max(Date.now(), new Date(String(row.expires_at)).getTime());
+      const next = new Date(base + numDays * 86_400_000).toISOString();
+      const now = nowIso();
+      stmt.extendExpiry.run(next, now, Number(id));
+      return { ok: true, account: toPublicAccount(this.findRawById(id)) };
+    },
+
+    /**
+     * 重置口令（后台「一键重置权限」）。
+     *
+     * 同时删除该账号的**全部会话** —— 否则旧会话仍在 Cookie 里有效，
+     * 「重置」会变成一句空话：能拿到旧 Cookie 的人继续畅通无阻。
+     *
+     * @param {{ id: number, password: string, allowGeneratedNumeric?: boolean }} input
+     */
+    async resetPassword({ id, password, allowGeneratedNumeric = false }) {
+      const row = this.findRawById(id);
+      if (!row) return { ok: false, code: 'NOT_FOUND', message: '账号不存在' };
+      const strength = checkPasswordStrength(password, { allowGeneratedNumeric });
+      if (!strength.ok) return { ok: false, code: 'WEAK_PASSWORD', message: strength.reason };
+
+      const hash = await hashPasswordAsync(String(password));
+      const now = nowIso();
+      stmt.resetPassword.run(hash, now, now, Number(id));
+      const killed = stmt.deleteSessionsOf.run(Number(id));
+      return {
+        ok: true,
+        revokedSessions: Number(killed.changes ?? 0),
+        account: toPublicAccount(this.findRawById(id)),
+      };
     },
 
     /** 列出账号（可按角色过滤），永不返回哈希 */
@@ -437,6 +564,24 @@ export function createAccountService(db, config) {
       stmt.revoke.run(now, now, Number(id));
       stmt.deleteSessionsOf.run(Number(id));
       return { ok: true, account: toPublicAccount({ ...row, revoked_at: now }) };
+    },
+
+    /**
+     * 解除吊销。
+     *
+     * 存在的理由：`revoked_at` 一旦置上，`isUsable()` 会无视到期时间直接拒绝，
+     * 因此「给一个被吊销过的手机号续期」必须先清掉它 —— 否则重置口令、
+     * 延长有效期都做了，账号依然登不进去，而管理员在界面上看到的是
+     * 「已批准 + 已生成通知」，问题极难定位。
+     *
+     * ⚠️ 刻意**不**恢复被吊销时清掉的会话：会话已删，用户需重新登录。
+     */
+    reactivateAccount(id) {
+      const row = this.findRawById(id);
+      if (!row) return { ok: false, code: 'NOT_FOUND', message: '账号不存在' };
+      const now = nowIso();
+      stmt.reactivate.run(now, Number(id));
+      return { ok: true, account: toPublicAccount({ ...row, revoked_at: null }) };
     },
 
     /** 清理过期会话（由定时任务调用） */

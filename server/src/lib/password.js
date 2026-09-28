@@ -9,7 +9,7 @@
  *
  * 校验使用 `timingSafeEqual`，避免时序侧信道。
  */
-import { randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomInt, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 
 /** 当前参数：N=2^15（32768），r=8，p=1 —— 实测单次约 170ms，安全性/延迟平衡点 */
 export const SCRYPT_PARAMS = Object.freeze({
@@ -192,15 +192,53 @@ export function verifyPasswordAsync(password, stored) {
 const DEMO_PASSWORDS = new Set(['<已清除>']);
 
 /**
+ * 生成 6 位数字口令 —— 用于「批准临时权限申请」时下发给申请人。
+ *
+ * ## 为什么允许它绕过全局强度校验
+ *
+ * `MIN_PASSWORD_LENGTH = 8` 是给**人自己设的口令**定的。这条链路的口令不是人选
+ * 的，而是系统随机生成、随通知一起发出、并绑定在一个默认 30 天就作废的
+ * viewer 账号上 —— 在这个场景里，长度 6 是需求明确规定的形态
+ * （通知文案写死为「随机密码为：（一个六位数字）」）。
+ *
+ * 因此**不**放宽全局下限，而是让调用方显式声明「这个口令是系统生成的」，
+ * 由 `checkPasswordStrength` 的第二个参数逐处开启。这样：
+ * - 任何忘记传参的调用点仍然受 8 位约束，不会静默变弱；
+ * - 想审计「谁在用短口令」只需搜 `allowGeneratedNumeric` 一个词。
+ *
+ * `crypto.randomInt` 而非 `Math.random`：后者不是密码学安全随机源，
+ * 6 位数字只有 100 万种，用可预测的 PRNG 等于把口令拱手让人。
+ *
+ * @returns {string} 形如 `483920`
+ */
+export function generateNumericPassword(length = 6) {
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    out += String(randomInt(0, 10));
+  }
+  // 首位为 0 也无妨（口令不是数字），但全 0 这类极端值仍然合法，不做额外约束
+  return out;
+}
+
+/** 是否形如「系统生成的数字口令」 */
+export function isGeneratedNumericPassword(password) {
+  return typeof password === 'string' && /^\d{6}$/.test(password);
+}
+
+/**
  * 口令强度校验：只做最小约束（长度 + 非常见弱口令），不引入复杂度地狱。
+ *
  * @param {string} password
+ * @param {{ allowGeneratedNumeric?: boolean }} [options]
+ *   `allowGeneratedNumeric`：仅「系统生成临时口令」这条链路可置 true。
  * @returns {{ ok: boolean, reason?: string }}
  */
-export function checkPasswordStrength(password) {
+export function checkPasswordStrength(password, options = {}) {
   if (typeof password !== 'string') {
     return { ok: false, reason: `口令至少 ${MIN_PASSWORD_LENGTH} 位` };
   }
-  if (password.length < MIN_PASSWORD_LENGTH && !DEMO_PASSWORDS.has(password)) {
+  const generated = Boolean(options.allowGeneratedNumeric) && isGeneratedNumericPassword(password);
+  if (password.length < MIN_PASSWORD_LENGTH && !DEMO_PASSWORDS.has(password) && !generated) {
     return { ok: false, reason: `口令至少 ${MIN_PASSWORD_LENGTH} 位` };
   }
   if (password.length > 200) {

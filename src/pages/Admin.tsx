@@ -3,9 +3,9 @@ import type { ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
-  Cloud,
-  CloudOff,
+  BarChart3,
   Database,
+  FolderUp,
   HardDriveDownload,
   LogOut,
   Pencil,
@@ -13,15 +13,12 @@ import {
   RefreshCw,
   Save,
   Trash2,
+  Users,
 } from 'lucide-react';
 import { useContent } from '@/lib/store';
 import { useAuth, roleLabel, CAP_MANAGE_ACCOUNTS } from '@/lib/auth';
 import { CATEGORY_META, type ArticleCategory, type PublishStatus } from '@/lib/types';
-import type {
-  ArticleInput,
-  MemberInput,
-  TimelineInput,
-} from '@/lib/contentApi';
+import type { ArticleInput, MemberInput, TimelineInput } from '@/lib/contentApi';
 import { SETTING_FIELDS } from '@/lib/siteConfig';
 import { SEED_ARTICLES, SEED_MEMBERS, SEED_TIMELINE } from '@/data/seed';
 import {
@@ -35,16 +32,62 @@ import {
 } from '@/components/admin/AdminUI';
 import ImageField from '@/components/admin/ImageField';
 import AccountManager from '@/components/admin/AccountManager';
+import StatsPanel from '@/components/admin/StatsPanel';
+import UploadPanel from '@/components/admin/UploadPanel';
 import PageHero from '@/components/site/PageHero';
 import { cn } from '@/lib/utils';
 
-type TabKey = 'article' | 'timeline' | 'member' | 'settings' | 'account';
+// ---------------------------------------------------------------------------
+// 栏目结构
+// ---------------------------------------------------------------------------
 
-const TABS: { key: TabKey; label: string }[] = [
+/**
+ * 顶层三大栏目。
+ *
+ * 与需求一一对应：**数据 / 内容上传与管理 / 账号管理**。
+ * 原来平铺的「内容条目 / 历史沿革 / 组织架构 / 站点设置」四个标签
+ * 收进「内容上传与管理」之下做二级标签 —— 它们都是「维护前台内容」这一类动作，
+ * 与「看数据」「管账号」不是同一层级的东西，平铺会让顶层标签变成 8 个。
+ */
+type ColumnKey = 'data' | 'content' | 'accounts';
+
+/** 「内容上传与管理」下的二级标签 */
+type ContentTabKey = 'upload' | 'article' | 'timeline' | 'member' | 'settings';
+
+const COLUMNS: Array<{
+  key: ColumnKey;
+  label: string;
+  icon: ReactNode;
+  description: string;
+  /** 需要的能力；缺省即进入本栏目即可见 */
+  requires?: string[];
+}> = [
+  {
+    key: 'data',
+    label: '数据',
+    icon: <BarChart3 className='h-4 w-4' />,
+    description: '网站累计浏览量、访客账号与权限期限',
+  },
+  {
+    key: 'content',
+    label: '内容上传与管理',
+    icon: <FolderUp className='h-4 w-4' />,
+    description: '一键上传资料、维护各栏目内容',
+  },
+  {
+    key: 'accounts',
+    label: '账号管理',
+    icon: <Users className='h-4 w-4' />,
+    description: '审批临时权限申请、重置与延长权限',
+    requires: [CAP_MANAGE_ACCOUNTS],
+  },
+];
+
+const CONTENT_TABS: Array<{ key: ContentTabKey; label: string }> = [
+  { key: 'upload', label: '文件上传' },
   { key: 'article', label: '内容条目' },
   { key: 'timeline', label: '历史沿革' },
   { key: 'member', label: '组织架构' },
-  { key: 'account', label: '账号管理' },
   { key: 'settings', label: '站点设置' },
 ];
 
@@ -94,19 +137,32 @@ const emptyMember = (): MemberInput => ({
 /**
  * 内容管理后台。
  *
- * 鉴权说明：本页的准入由路由层的 <RequireAuth required={[CAP_MANAGE_CONTENT]}> 负责，
+ * 鉴权说明：本页的准入由路由层的 `<RequireAuth required={[CAP_MANAGE_CONTENT]}>` 负责，
  * 页面内部不再自行校验口令。旧实现把 `admin_passcode` 当作「前端比对的字符串」，
  * 等于把管理口令公开在页面配置里——任何人打开开发者工具即可获得，
  * 也能手写 sessionStorage 标记绕过。现改为服务端会话判定，口令永不下发。
+ *
+ * 栏目权限：`账号管理` 额外要求 `canManageAccounts`，无权限时该栏目直接不出现在侧栏
+ * （而不是显示成灰色按钮让人点进去才发现进不去）。后端每个端点也独立判定。
  */
 export function Admin() {
   const content = useContent();
   const navigate = useNavigate();
   const { account, role, capabilities, logout } = useAuth();
-  const [tab, setTab] = useState<TabKey>('article');
+  const [column, setColumn] = useState<ColumnKey>('data');
+  const [contentTab, setContentTab] = useState<ContentTabKey>('upload');
   const [busy, setBusy] = useState(false);
 
-  const canManageAccounts = capabilities.includes(CAP_MANAGE_ACCOUNTS);
+  const columns = COLUMNS.filter(
+    (c) => !c.requires || c.requires.every((cap) => capabilities.includes(cap))
+  );
+
+  /** 若当前栏目因权限变化而不可见（例如会话被降权），退回第一个可见栏目 */
+  useEffect(() => {
+    if (!columns.some((c) => c.key === column)) {
+      setColumn(columns[0]?.key ?? 'data');
+    }
+  }, [columns, column]);
 
   const run = useCallback(async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -142,34 +198,34 @@ export function Admin() {
       }
     });
 
+  const active = columns.find((c) => c.key === column) ?? columns[0];
+
   return (
     <div>
       <PageHero
-        title='内容管理'
-        description='按栏目维护站点内容；所有改动保存后立即在前台生效。'
+        title='栏目与网站管理'
+        description='数据、内容、账号三个栏目；所有改动保存后立即在前台生效。'
       />
 
       <div className='mx-auto max-w-7xl px-4 py-10 sm:px-6'>
         <ModeBanner />
 
+        {/* 顶部：栏目切换 + 账号操作 */}
         <div className='mt-6 flex flex-wrap items-center gap-2 border-b border-gray-100 pb-4'>
-          {TABS.map((t) => (
+          {columns.map((c) => (
             <button
-              key={t.key}
+              key={c.key}
               type='button'
-              onClick={() => setTab(t.key)}
+              onClick={() => setColumn(c.key)}
               className={cn(
-                'rounded-lg px-4 py-2 text-sm font-medium transition-colors',
-                tab === t.key
+                'inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-colors',
+                column === c.key
                   ? 'bg-brand-800 text-white'
-                  : 'bg-gray-50 text-gray-600 hover:bg-brand-50 hover:text-brand-800',
-                // 没有账号管理权限时把该标签弱化，避免点进去才发现进不去
-                t.key === 'account' && !canManageAccounts && 'cursor-not-allowed opacity-40'
+                  : 'bg-gray-50 text-gray-600 hover:bg-brand-50 hover:text-brand-800'
               )}
-              disabled={t.key === 'account' && !canManageAccounts}
-              title={t.key === 'account' && !canManageAccounts ? '当前账号无账号管理权限' : undefined}
             >
-              {t.label}
+              {c.icon}
+              {c.label}
             </button>
           ))}
 
@@ -178,11 +234,7 @@ export function Admin() {
               {roleLabel(role)}
               {account?.displayName ? ` · ${account.displayName}` : ''}
             </span>
-            <AdminButton
-              variant='outline'
-              onClick={() => void run(content.reload)}
-              disabled={busy}
-            >
+            <AdminButton variant='outline' onClick={() => void run(content.reload)} disabled={busy}>
               <RefreshCw className={cn('h-3.5 w-3.5', busy && 'animate-spin')} />
               刷新数据
             </AdminButton>
@@ -204,13 +256,71 @@ export function Admin() {
           </div>
         </div>
 
-        <div className='mt-6 space-y-6'>
-          {tab === 'article' ? <ArticleManager busy={busy} run={run} /> : null}
-          {tab === 'timeline' ? <TimelineManager busy={busy} run={run} /> : null}
-          {tab === 'member' ? <MemberManager busy={busy} run={run} /> : null}
-          {tab === 'account' ? <AccountManager /> : null}
-          {tab === 'settings' ? <SettingsManager busy={busy} run={run} /> : null}
+        <div className='mt-6'>
+          {active?.key === 'data' ? <StatsPanel /> : null}
+          {active?.key === 'accounts' ? <AccountManager /> : null}
+          {active?.key === 'content' ? (
+            <ContentColumn
+              tab={contentTab}
+              onTab={setContentTab}
+              busy={busy}
+              run={run}
+            />
+          ) : null}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 「内容上传与管理」栏目：左侧二级导航（粘性）+ 右侧面板。
+ *
+ * 二级标签只有 5 个、且都是表单型面板，不适合做滚动联动（滚动联动要求每节高度
+ * 相近，而「文件上传」比「站点设置」长得多，联动高亮会跳来跳去）。
+ * 用点击切换更符合「我在编辑哪一块」的心智。
+ */
+function ContentColumn({
+  tab,
+  onTab,
+  busy,
+  run,
+}: {
+  tab: ContentTabKey;
+  onTab: (t: ContentTabKey) => void;
+  busy: boolean;
+  run: Runner;
+}) {
+  return (
+    <div className='grid gap-6 lg:grid-cols-[200px_minmax(0,1fr)]'>
+      <nav className='lg:sticky lg:top-24 lg:self-start'>
+        <p className='mb-2 px-2 text-xs font-medium text-gray-400'>内容上传与管理</p>
+        <ul className='flex gap-1 overflow-x-auto lg:flex-col lg:overflow-visible'>
+          {CONTENT_TABS.map((t) => (
+            <li key={t.key} className='shrink-0'>
+              <button
+                type='button'
+                onClick={() => onTab(t.key)}
+                className={cn(
+                  'w-full whitespace-nowrap rounded-lg px-3 py-2 text-left text-sm transition-colors',
+                  tab === t.key
+                    ? 'bg-brand-50 font-medium text-brand-800'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-brand-700'
+                )}
+              >
+                {t.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
+
+      <div className='min-w-0 space-y-6'>
+        {tab === 'upload' ? <UploadPanel /> : null}
+        {tab === 'article' ? <ArticleManager busy={busy} run={run} /> : null}
+        {tab === 'timeline' ? <TimelineManager busy={busy} run={run} /> : null}
+        {tab === 'member' ? <MemberManager busy={busy} run={run} /> : null}
+        {tab === 'settings' ? <SettingsManager busy={busy} run={run} /> : null}
       </div>
     </div>
   );
@@ -232,11 +342,12 @@ function ModeBanner() {
           : 'border-amber-200 bg-amber-50/70 text-amber-800'
       )}
     >
-      {cloud ? (
-        <Cloud className='mt-0.5 h-5 w-5 shrink-0' />
-      ) : (
-        <CloudOff className='mt-0.5 h-5 w-5 shrink-0' />
-      )}
+      <span
+        className={cn(
+          'mt-0.5 inline-block h-2.5 w-2.5 shrink-0 rounded-full',
+          cloud ? 'bg-emerald-500' : 'bg-amber-500'
+        )}
+      />
       <div>
         <p className='font-medium'>
           {cloud
@@ -908,12 +1019,20 @@ function SettingsManager({ busy, run }: { busy: boolean; run: Runner }) {
       }
     });
 
+  /**
+   * 分组清单。
+   *
+   * ⚠️ 曾经这里还有一项「安全管理」，里面只有一个 `admin_passcode` 输入框。
+   * 那是认证改造前的遗留：口令校验早已换成服务端会话（见 `lib/auth.tsx`），
+   * 该字段保存后**没有任何代码读取**，改了不生效却让运维以为改掉了管理口令 ——
+   * 比没有这个框更危险。现连同 `SETTING_FIELDS` 里的定义一起移除。
+   * 账号与口令的管理统一在「账号管理」栏目里做。
+   */
   const groups: { key: string; label: string }[] = [
     { key: 'basic', label: '基本信息' },
     { key: 'about', label: '协会介绍与组织架构' },
     { key: 'contact', label: '联系方式（页脚）' },
     { key: 'stock', label: '行情看板' },
-    { key: 'admin', label: '安全管理' },
   ];
 
   return (

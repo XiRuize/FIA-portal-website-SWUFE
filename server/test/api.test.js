@@ -450,3 +450,80 @@ test('非法 JSON 请求体返回 400', async () => {
   });
   assert.equal(res.status, 400, '非法 JSON 应返回 400 而不是崩溃');
 });
+
+/* ─────────────────── 畸形 URL：不得返回 500，更不得杀进程 ─────────────────── */
+
+/**
+ * 回归用例（对应 P0）。
+ *
+ * ## 曾经的缺陷
+ *
+ * `matchRoute()` 用裸的 `decodeURIComponent` 解路径参数，且该调用位于
+ * 请求处理 `try` **之外**。畸形百分号编码抛出的 `URIError` 于是逃逸成
+ * unhandledRejection；Node 22 默认 `--unhandled-rejections=throw`，
+ * **整个后端进程直接退出**（实测退出码 1）。未认证、单请求即可触发。
+ *
+ * ## 断言策略
+ *
+ * 逐条断言「状态码是 400 且不是 5xx」，并在最后发一次正常请求确认服务仍在。
+ * 之所以不断言「进程活着」——那需要起子进程，代价大且易 flaky；而
+ * 「畸形输入得到 400 且后续请求正常」已经蕴含了「异常被正确收口」。
+ */
+const MALFORMED_PATHS = [
+  ['截断的多字节序列', 'GET', '/api/resources/%E4%B8%'],
+  ['孤立百分号', 'GET', '/api/resources/%'],
+  ['非法 UTF-8 序列', 'GET', '/api/resources/%FF%FE'],
+  ['百分号后跟非十六进制', 'GET', '/api/resources/%ZZ'],
+  ['下载端点的畸形参数', 'GET', '/api/resources/%E4%B8%/download'],
+  ['预览端点的畸形参数', 'GET', '/api/resources/%E4%B8%/preview'],
+  ['点赞端点的畸形参数', 'POST', '/api/resources/%E4%B8%/like'],
+];
+
+for (const [label, method, p] of MALFORMED_PATHS) {
+  test(`畸形 URL（${label}）返回 400 而不是 5xx`, async () => {
+    const r = await call(method, p);
+    assert.equal(
+      r.status,
+      400,
+      `${p} 应回 400 MALFORMED_PATH，实际 ${r.status}`
+    );
+    assert.equal(r.json?.ok, false);
+    assert.equal(r.json?.error?.code, 'MALFORMED_PATH');
+  });
+}
+
+test('畸形 URL 之后服务仍然可用（异常被收口，未逃逸为 unhandledRejection）', async () => {
+  // 先把所有畸形路径打一遍，再探活
+  for (const [, method, p] of MALFORMED_PATHS) {
+    await call(method, p);
+  }
+  const health = await call('GET', '/api/health');
+  assert.equal(health.status, 200, '畸形请求之后 /api/health 必须仍然 200');
+
+  // 正常业务请求也不能受影响
+  const list = await call('GET', '/api/resources');
+  assert.equal(list.status, 200);
+  assert.equal(list.json.ok, true);
+});
+
+test('合法百分号编码照常解码（收紧校验不能误伤正常请求）', async () => {
+  // %34%36 即 "46"。库里没有 id=46 的条目，因此期望 404「资料不存在」
+  // —— 关键是它必须被成功解码并进入业务逻辑，而不是被判成 MALFORMED_PATH。
+  const r = await call('GET', '/api/resources/%34%36');
+  assert.equal(r.status, 404);
+  assert.equal(r.json?.error?.code, 'NOT_FOUND');
+});
+
+test('安全解码：越界与畸形输入一律判非法', async () => {
+  const { safeDecode } = await import('../src/lib/http.js');
+  // 正常值
+  assert.equal(safeDecode('abc'), 'abc');
+  assert.equal(safeDecode('%34%36'), '46');
+  assert.equal(safeDecode('%E4%B8%AD'), '中');
+  // 畸形值 → null（由调用方决定如何响应，绝不抛错）
+  for (const bad of ['%E4%B8%', '%', '%ZZ', '%FF%FE', '%E4%B8']) {
+    assert.equal(safeDecode(bad), null, `${bad} 应判为非法`);
+  }
+  // NUL 注入
+  assert.equal(safeDecode('%00abc'), null, '含 NUL 的值应判为非法');
+});

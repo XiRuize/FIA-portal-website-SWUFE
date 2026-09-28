@@ -15,7 +15,9 @@ export function createAuthRoutes(ctx) {
     /** POST /api/auth/login */
     async login(req, res) {
       const body = await http.readJsonBody(req);
-      const ip = http.clientIp(req);
+      // 用 ctx.clientIp：它尊重 TRUST_PROXY 配置，默认只认 TCP 源地址。
+      // 直接调 http.clientIp 会退回旧的无条件取信 XFF 行为。
+      const ip = ctx.clientIp(req);
       const userAgent = String(req.headers['user-agent'] ?? '');
 
       const result = await accounts.login({

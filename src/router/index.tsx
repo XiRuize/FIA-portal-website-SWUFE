@@ -9,7 +9,6 @@ import ArticleDetail from '@/pages/ArticleDetail';
 import Admin from '@/pages/Admin';
 import Login from '@/pages/Login';
 import ProductionDetail from '@/pages/ProductionDetail';
-import ExamplesPage from '@/pages/ExamplesPage';
 import NotFound from '@/pages/NotFound';
 import RequireAuth from '@/components/auth/RequireAuth';
 import { ADMIN_REQUIRED_CAPS, PRODUCTIONS_REQUIRED_CAPS } from '@/lib/auth';
@@ -65,16 +64,30 @@ export const router = createHashRouter([
         ),
       },
       {
+        /**
+         * 「栏目与网站管理」。
+         *
+         * ⚠️ 这是**门禁入口**而不是隐藏入口：导航栏里对所有访客可见，
+         * 权限判定发生在点击之后。因此这里的 `denied` 文案是产品指定的原话
+         * （「没有权限，请登录管理员账号」），不是通用说法 ——
+         * 访客必须一眼看懂「这不是 404，是我需要管理员账号」。
+         */
         path: 'admin',
         element: (
-          <RequireAuth required={ADMIN_REQUIRED_CAPS}>
+          <RequireAuth
+            required={ADMIN_REQUIRED_CAPS}
+            denied={{
+              title: '没有权限，请登录管理员账号',
+              message:
+                '「栏目与网站管理」仅对管理员账号开放，用于维护资料、审核临时权限申请与查看站点数据。',
+              actionLabel: '前往登录管理员账号',
+            }}
+          >
             <Admin />
           </RequireAuth>
         ),
       },
 
-      // 模板示例页，仅作参考，未在导航中暴露
-      { path: 'examples', element: <ExamplesPage /> },
       { path: '*', element: <NotFound /> },
     ],
   },

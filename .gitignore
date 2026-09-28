@@ -82,6 +82,8 @@ server/data/.env
 # 临时与缓存
 tmp/
 temp/
+# Vite 在 Windows 上偶尔残留的配置临时快照（约 17 KB，无意义产物）
+vite.config.ts.timestamp-*.mjs
 .cache
 .parcel-cache
 .grunt

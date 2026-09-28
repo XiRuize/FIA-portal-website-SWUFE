@@ -19,13 +19,30 @@ import { plain } from './db.js';
 import { classifyItem } from './categorize.js';
 
 /**
- * 作品元数据（sidecar）位置：`server/data/production-meta.json`。
+ * 作品元数据（sidecar）的**默认**位置：`server/data/production-meta.json`。
  *
  * 用 `import.meta.url` 定位而不是 `process.cwd()`：扫描脚本可能从任意目录被调用
  * （CLI、测试、启动自检），相对 cwd 的路径会静默读不到文件 ——
  * 而「读不到就退回自动归类」的行为会让这个 bug 完全无声。
+ *
+ * ⚠️ 这只是一个**默认值**。实际使用的路径由 `config.resourceMetaPath` 决定
+ * （见下方 `DEFAULT_RESOURCE_META_URL` 的说明），本常量作为它的兜底。
  */
-const META_URL = new URL('../../data/production-meta.json', import.meta.url);
+export const DEFAULT_RESOURCE_META_URL = new URL(
+  '../../data/production-meta.json',
+  import.meta.url
+);
+
+/**
+ * 覆写表位置此前是**写死的绝对路径**，而素材目录（`MATERIALS_DIR`）是可配置的
+ * —— 两者因此会漂移：换一个素材目录做测试或开第二实例时，扫描的是新素材，
+ * 写的却是**生产环境那张覆写表**。后果不是报错，而是静默污染：
+ * 生产库的分类覆写里会冒出一批只存在于临时目录的路径。
+ *
+ * 现在它和 `DB_PATH` / `MATERIALS_DIR` 一样从 config 取，默认值即本常量，
+ * 因此生产行为完全不变，而测试可以把两样一起指到临时目录里。
+ */
+const META_URL = DEFAULT_RESOURCE_META_URL;
 
 /**
  * 读取作品元数据覆写表。
@@ -69,6 +86,20 @@ function normalizeMeta(entry) {
         )
         .filter((s) => s && s.src)
     : [];
+  /**
+   * 访问级别覆写。
+   *
+   * 默认口径是「按磁盘目录判定」（`RESTRICTED_CATEGORIES`），但上传时管理员
+   * 需要**逐条**决定一份资料是公开还是仅成员可见 —— 例如同一份研报放进
+   * 「研发部内部资料」但这一份要公开。没有这个字段，管理员的选择会在
+   * 下一次扫描时被目录规则静默推翻。
+   *
+   * 只接受白名单取值，非法值一律当作「未覆写」，避免把脏数据写进
+   * `access_level`（该列有 CHECK 约束，写错会让整次扫描事务回滚）。
+   */
+  const accessLevel = ['public', 'member'].includes(str(entry.accessLevel))
+    ? str(entry.accessLevel)
+    : '';
   return {
     displayCategory: str(entry.displayCategory),
     title: str(entry.title),
@@ -78,7 +109,61 @@ function normalizeMeta(entry) {
     summary: str(entry.summary),
     tags,
     screenshots: JSON.stringify(shots),
+    accessLevel,
   };
+}
+
+/**
+ * 把一条覆写写进作品元数据文件（幂等 upsert）。
+ *
+ * 为什么必须落在这个文件里：数据库是「磁盘 + 该文件」的**派生缓存**，
+ * `runScan` 每次都会用 `classifyItem()` 重算 `display_category`。
+ * 管理员在上传时勾选的分只要不写进这个覆写表，下次扫描就会被静默推翻 ——
+ * 表现为「昨天明明选的是『数据』，今天变成『研报』了」。
+ *
+ * @param {string} relPath POSIX 风格相对路径（与库中 rel_path 一致）
+ * @param {object} patch 要合并的字段（displayCategory / accessLevel / author / …）
+ * @param {URL|string} [metaUrl]
+ * @returns {{ ok: boolean, message?: string }}
+ */
+export function upsertResourceMeta(relPath, patch, metaUrl = META_URL) {
+  const key = String(relPath ?? '').trim();
+  if (!key) return { ok: false, message: '相对路径不能为空' };
+
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(metaUrl, 'utf8'));
+  } catch {
+    // 文件不存在或损坏 → 从空表重建。丢弃损坏内容是可接受的：
+    // 它只是一张覆写表，重建后自动归类仍然能用，不影响素材本身。
+    doc = { items: {} };
+  }
+  if (!doc || typeof doc !== 'object') doc = { items: {} };
+  if (!doc.items || typeof doc.items !== 'object') doc.items = {};
+
+  const prev = doc.items[key] && typeof doc.items[key] === 'object' ? doc.items[key] : {};
+  const next = { ...prev };
+
+  // 只合并「有值」的字段。空串表示「不覆写该项」，而不是「把它清空」——
+  // 否则一次只填了分类的上传会把作者、简介一起抹掉。
+  for (const [k, v] of Object.entries(patch ?? {})) {
+    if (v === undefined || v === null || v === '') continue;
+    next[k] = v;
+  }
+  doc.items[key] = next;
+
+  try {
+    fs.writeFileSync(metaUrl, `${JSON.stringify(doc, null, 2)}\n`, 'utf8');
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** 读回某条覆写（测试与调试用） */
+export function readResourceMeta(relPath, metaUrl = META_URL) {
+  const table = loadResourceMeta(metaUrl);
+  return table[String(relPath)] ?? null;
 }
 
 /** 扩展名 → 粗分类 */
@@ -233,11 +318,17 @@ export function runScan(db, config) {
   db.exec('BEGIN');
   try {
     for (const file of files) {
-      const accessLevel = restricted.has(file.categoryDir) ? 'member' : 'public';
       // 展示类目与磁盘目录解耦：读者按内容形态找资料，不按它被存在哪个文件夹。
       // 元数据里点名覆写的优先，否则交给分类器推断。
       const meta = normalizeMeta(metaTable[file.relPath]);
       const displayCategory = meta?.displayCategory || classifyItem(file);
+      /**
+       * 访问级别的优先级：**覆写表 > 目录规则**。
+       * 覆写表是管理员在「内容上传与管理」里逐条做的显式决定，
+       * 目录规则只是默认值 —— 让默认值盖掉显式决定，管理员的操作就白做了。
+       */
+      const accessLevel =
+        meta?.accessLevel || (restricted.has(file.categoryDir) ? 'member' : 'public');
       const before = plain(
         db.prepare('SELECT id FROM resources WHERE rel_path = ?').get(file.relPath)
       );

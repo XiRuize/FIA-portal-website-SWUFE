@@ -1,84 +1,113 @@
-# React Vite Template — Agent Contract
+# 西财金融投资协会官网 — Agent 契约
 
 ## Goal
 
-Use this template with deterministic rules so AI agents can deliver features quickly with minimal guessing.
+本仓库是**西南财经大学金融投资协会（FIA）官网**，不是通用模板。
+按下面这些确定性的规则交付，才能少猜、少返工。
 
 ## Command Contract
 
-Use `pnpm` only.
+只用 `pnpm`。
 
 ```bash
-pnpm dev         # Start dev server
-pnpm build       # Build production assets
-pnpm type-check  # TypeScript check (tsc --noEmit)
-pnpm lint        # ESLint
-pnpm check       # Required gate: type-check + lint
+pnpm dev         # 前端 dev server（http://127.0.0.1:5173）
+pnpm build       # 构建生产产物
+pnpm type-check  # tsc --noEmit
+pnpm lint        # eslint src --ext ts,tsx
+pnpm check       # 必过门禁：type-check + lint
 ```
 
-## Task Entry (always follow)
+后端是**零运行时第三方依赖**的独立服务，在 `server/` 目录下单独跑：
 
-1. Confirm target template and feature goal in one sentence.
-2. Locate the matching module area (`pages`, `components`, `lib`, `router`).
-3. Reuse existing patterns from `src/examples` and `src/components/ui`.
-4. Implement with framework-native style (React function components + hooks).
-5. Run `pnpm check` before finalizing.
+```bash
+cd server && node src/index.js    # 起后端（默认 127.0.0.1:8787）
+cd server && npm test             # 后端测试（node --test）
+cd server && npm run verify       # 一键自检
+```
 
-## Isomorphic Structure Mapping
+⚠️ **改了后端代码必须重启后端进程**，否则「改动不生效」。
+前端经 Vite 的 `/api` 代理访问后端以保持同源 Cookie；**后端没起时，
+登录、资料库、产出模块会整体失效**。
 
-Use these module locations in this React template:
+## Task Entry（每次都照做）
 
-| Concern             | React location               |
-| ------------------- | ---------------------------- |
-| Route pages         | `src/pages/*.tsx`            |
-| Shared components   | `src/components/**`          |
-| API client          | `src/lib/api.ts`             |
-| Service helpers     | `src/lib/services.ts`        |
-| Utilities           | `src/lib/utils.ts`           |
-| Router registry     | `src/router/index.tsx`       |
-| Examples entry page | `src/pages/ExamplesPage.tsx` |
-| Examples route      | `/#/examples`                |
+1. 用一句话说清要改哪个页面/模块、达成什么目标。
+2. 定位到对应目录（`pages` / `components` / `lib` / `router` / `server/src`）。
+3. 先读同类既有实现的写法，跟着它写，不要自创第二套风格。
+4. 用 React 函数组件 + hooks 实现。
+5. 收尾跑 `pnpm check`；动了后端还要跑 `npm test` 与 `npm run verify`。
+
+## Structure Mapping
+
+| 关注点 | 位置 |
+| --- | --- |
+| 路由页面 | `src/pages/*.tsx` |
+| 站点组件 | `src/components/site/*` |
+| 后台组件 | `src/components/admin/*` |
+| 鉴权与会话 | `src/lib/auth.tsx`（常量单一出处）+ `src/components/auth/RequireAuth.tsx` |
+| 后端 API 客户端 | `src/lib/backendApi.ts` |
+| 内容仓库（前台内容） | `src/lib/store.tsx` + `contentApi.ts` + `localDb.ts` |
+| 种子内容 | `src/data/seed.ts`（改正文后**必须**递增顶部 `SEED_REV`） |
+| 路由注册表 | `src/router/index.tsx` |
+| 后端入口 | `server/src/index.js` → `server/src/app.js` 的 `createApp()` |
+| 后端路由 | `server/src/routes/*.js` |
+| 后端服务层 | `server/src/lib/*.js` |
+| 后端测试 | `server/test/*.test.js` |
+
+## 硬性约定
+
+- **全站浅色主题**：不要用 `bg-night-*` / `text-white` 这类深色面。
+- **涨跌配色按 A 股**：涨=红、跌=绿（与欧美相反）。
+- 会员口径对外统一「**2000+**」（累计）；成立时间 **2002 年 9 月**
+  （写「2006 年成立」即错误）。成立年份散落在时间轴、`about_content`、
+  `about_stats`、`PartnerLogos` 多处，改一处要顺带查其余。
+- 受限内容的读与写**共用同一道闸门**；前端守卫只是体验层，
+  真隔离在后端按会话判定。新增 `/:id` 子路由前先问「这里要不要闸门」。
+- 401 = 没登录，403 = 权限不够。区分开，不要混用。
+- 只改 `seed.ts` 不递增 `SEED_REV` → 那台浏览器永远看不到新内容。
 
 ## Minimal Delivery Paths
 
-### New page (5 steps)
+### 新增页面（5 步）
 
-1. Create `src/pages/<FeatureName>.tsx`.
-2. Add route in `src/router/index.tsx` with path + element.
-3. Use existing UI primitives from `src/components/ui`.
-4. If data is required, call service functions via `src/lib/services.ts`.
-5. Run `pnpm check`.
+1. 建 `src/pages/<Name>.tsx`。
+2. 在 `src/router/index.tsx` 注册路由；需要登录就包 `RequireAuth`。
+3. 复用 `src/components/site/*` 与 `src/components/admin/AdminUI.tsx` 的既有原语。
+4. 需要数据就走 `src/lib/backendApi.ts`。
+5. 跑 `pnpm check`。
 
-### New component (4 steps)
+### 新增组件（4 步）
 
-1. Create component under `src/components/` (or `src/components/ui/` for primitives).
-2. Type all props and callbacks explicitly.
-3. Keep styling Tailwind-first and merge classes via `cn` when needed.
-4. Run `pnpm check`.
+1. 建在 `src/components/site/`（对外）或 `src/components/admin/`（后台）。
+2. props 与回调显式标类型。
+3. Tailwind 优先，合并类名用 `cn`。
+4. 跑 `pnpm check`。
 
-### New API flow (4 steps)
+### 新增后端接口（5 步）
 
-1. Define/extend endpoint calls in `src/lib/api.ts` or service module.
-2. Add typed service wrapper in `src/lib/services.ts`.
-3. Consume via page/component using `useApi` style pattern.
-4. Run `pnpm check`.
+1. 在 `server/src/routes/` 的对应路由文件里加处理函数。
+2. 在 `server/src/app.js` 的 `ROUTES` 表登记 `method + 路径模板 + target`。
+3. 需要鉴权就从 `ctx.guards` 取闸门（`admin` / `accounts` / `resources`）。
+4. 在 `server/test/` 补用例，覆盖**正常路径 + 越权路径**。
+5. 跑 `npm test` 与 `npm run verify`。
 
 ## Allowed Changes
 
-- `src/pages/**`, `src/components/**`, `src/lib/**`, `src/router/**`
-- Template docs (`AGENTS.md`, `README.md`)
-- Template-local config required for feature delivery
+- `src/pages/**`、`src/components/**`、`src/lib/**`、`src/router/**`、`src/data/**`
+- `server/src/**`、`server/test/**`、`server/scripts/**`
+- 文档（`AGENTS.md`、`README.md`、`VERIFY.md`）
 
 ## Forbidden Changes
 
-- Do not copy `src/examples/*` into production files verbatim.
-- Do not change package manager (`pnpm` is mandatory).
-- Do not add parallel agent rule docs (this file is the single source).
-- Do not introduce framework-mixed patterns (keep React idioms only).
+- 不要换包管理器（`pnpm` 是硬要求）。
+- 不要新增平行的 agent 规则文档（**本文件是单一出处**）。
+- 不要引入第二套框架写法（保持 React idioms）。
+- 不要为了让数字好看而删掉被闸门挡下的数据记录 —— 挡在前台是 `isLibraryItem()` 的职责。
 
 ## Pre-submit Checklist
 
-1. `pnpm check` passes in this template.
-2. If template metadata/version changed, validate related metadata files before release.
-3. New route/page/API follows the mapping table and naming conventions.
-4. `src/examples` remains reference-only.
+1. `pnpm check` 通过。
+2. 动了后端：`cd server && npm test` 与 `npm run verify` 通过。
+3. 动了权限、数据源或归类规则：**必须复跑**上述两项（有回归用例专门看守这些边界）。
+4. 改了 `src/data/seed.ts` 正文：`SEED_REV` 已递增。
+5. 新增路由/页面/接口遵循上面的映射表与命名习惯。

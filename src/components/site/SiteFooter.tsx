@@ -2,7 +2,7 @@ import { Link } from 'react-router-dom';
 import { Mail, MapPin, MessageSquare, Phone } from 'lucide-react';
 import { useContent } from '@/lib/store';
 import { getSetting, getRawSetting } from '@/lib/siteConfig';
-import { NAV_ITEMS } from './SiteHeader';
+import { ADMIN_ENTRY, NAV_ITEMS } from './SiteHeader';
 
 /** 占位文案：信息尚未收集时统一展示，便于后续替换 */
 const PENDING = '信息待补充';
@@ -109,19 +109,17 @@ export function SiteFooter() {
             快速导航
           </h4>
           <ul className='mt-4 grid grid-cols-2 gap-2 text-sm'>
-            {[...NAV_ITEMS, { to: '/admin', label: '内容管理', end: false }].map(
-              (item) => (
-                <li key={item.to}>
-                  <Link
-                    to={item.to}
-                    className='group inline-flex items-center gap-1 text-ink-600 transition-colors hover:text-flare-600'
-                  >
-                    <span className='h-px w-0 bg-flare-400 transition-all duration-300 ease-smooth group-hover:w-3' />
-                    {item.label}
-                  </Link>
-                </li>
-              )
-            )}
+            {[...NAV_ITEMS, { ...ADMIN_ENTRY, end: false }].map((item) => (
+              <li key={item.to}>
+                <Link
+                  to={item.to}
+                  className='group inline-flex items-center gap-1 text-ink-600 transition-colors hover:text-flare-600'
+                >
+                  <span className='h-px w-0 bg-flare-400 transition-all duration-300 ease-smooth group-hover:w-3' />
+                  {item.label}
+                </Link>
+              </li>
+            ))}
           </ul>
         </div>
       </div>

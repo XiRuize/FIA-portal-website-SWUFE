@@ -12,7 +12,7 @@ export interface SettingFieldMeta {
   hint?: string;
   multiline?: boolean;
   /** 归入哪个分组 */
-  group: 'basic' | 'about' | 'contact' | 'stock' | 'admin';
+  group: 'basic' | 'about' | 'contact' | 'stock';
 }
 
 export const SETTING_FIELDS: SettingFieldMeta[] = [
@@ -69,13 +69,6 @@ export const SETTING_FIELDS: SettingFieldMeta[] = [
     hint: '格式：[{"code":"600702","name":"舍得酒业"}]',
     multiline: true,
     group: 'stock',
-  },
-
-  {
-    key: 'admin_passcode',
-    label: '内容管理口令',
-    hint: 'Demo 默认 swufe2026，正式上线前请修改',
-    group: 'admin',
   },
 ];
 

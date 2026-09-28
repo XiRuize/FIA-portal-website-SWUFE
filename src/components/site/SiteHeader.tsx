@@ -3,7 +3,7 @@ import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Activity, ArrowUpRight, LogIn, LogOut, Menu, Settings, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useContent } from '@/lib/store';
-import { useAuth, roleLabel, CAP_MANAGE_CONTENT } from '@/lib/auth';
+import { useAuth, roleLabel } from '@/lib/auth';
 import { getSetting } from '@/lib/siteConfig';
 
 /**
@@ -35,6 +35,15 @@ export const NAV_ITEMS: Array<{
   { to: '/news', label: '新闻与资讯' },
 ];
 
+/**
+ * 「栏目与网站管理」入口的路径与标签。
+ *
+ * 单独导出是因为**页脚（`SiteFooter`）也要用同一个入口** ——
+ * 早先页脚自己硬编码了 `{ to: '/admin', label: '内容管理' }`，
+ * 于是同一个入口在页头和页脚有两个名字。把标签收敛到一处。
+ */
+export const ADMIN_ENTRY = { to: '/admin', label: '栏目与网站管理' } as const;
+
 /** 协会徽标：浅红→金渐变 + 呼吸柔光 + 简称首字 */
 function Badge({ short }: { short: string }) {
   return (
@@ -50,11 +59,149 @@ function Badge({ short }: { short: string }) {
   );
 }
 
+/**
+ * 主导航末尾的「栏目与网站管理 与 登录」。
+ *
+ * ## 为什么它不隐藏
+ *
+ * 这一项**对所有访客可见**，包括未登录的人。理由与「社团成员产出」相同：
+ * 一个看不见的入口等于不存在 —— 申请人无从知道该功能，也就不会去申请权限。
+ * 因此这里刻意不做 `canAdmin` 判断，把「有没有权限」的判定留给 `/admin`
+ * 页面本身（无权限时由 `RequireAuth` 渲染「没有权限，请登录管理员账号」）。
+ *
+ * ## 三种登录态下的呈现
+ *
+ * - 未登录：`栏目与网站管理` 与 `登录` 两个入口，中间以「与」相连；
+ * - 已登录：`栏目与网站管理` + 角色徽标 + `退出`（此时不再需要「登录」）；
+ * - 已登录但无管理权限：入口仍在，点进去看到的是「权限不足」页而不是报错。
+ *
+ * @param variant `desktop` 走横向导航样式，`mobile` 走抽屉的整行卡片样式
+ */
+function AdminEntryNav({ variant }: { variant: 'desktop' | 'mobile' }) {
+  const { status, role, account, logout } = useAuth();
+  const navigate = useNavigate();
+  const signedIn = status === 'authenticated';
+  const isMobile = variant === 'mobile';
+
+  const itemClass = ({ isActive }: { isActive: boolean }) =>
+    isMobile
+      ? cn(
+          'flex items-center justify-between rounded-xl border px-4 py-3 text-sm font-medium transition-all duration-500 ease-smooth',
+          isActive
+            ? 'border-flare-200 bg-flare-50 text-flare-700'
+            : 'border-ink-900/[0.07] bg-white text-ink-700'
+        )
+      : cn(
+          'group relative rounded-lg px-3.5 py-2 text-sm font-medium transition-colors',
+          isActive ? 'text-flare-600' : 'text-ink-600 hover:bg-flare-50 hover:text-ink-900'
+        );
+
+  if (isMobile) {
+    return (
+      <div className='space-y-1'>
+        <NavLink to={ADMIN_ENTRY.to} end className={itemClass}>
+          <span className='inline-flex items-center gap-2'>
+            <Settings className='h-4 w-4 opacity-60' />
+            {ADMIN_ENTRY.label}
+          </span>
+          <ArrowUpRight className='h-4 w-4 opacity-40' />
+        </NavLink>
+
+        {signedIn ? (
+          <div className='flex items-center justify-between rounded-xl border border-ink-900/[0.07] bg-ink-50/60 px-4 py-3'>
+            <span className='num text-xs text-ink-600'>
+              {roleLabel(role)}
+              {account?.displayName ? ` · ${account.displayName}` : ''}
+            </span>
+            <button
+              type='button'
+              onClick={() => {
+                void logout().then(() => navigate('/', { replace: true }));
+              }}
+              className='inline-flex items-center gap-1 text-xs text-ink-500 transition-colors hover:text-flare-600'
+            >
+              <LogOut className='h-3.5 w-3.5' />
+              退出
+            </button>
+          </div>
+        ) : (
+          <NavLink to='/login' className={itemClass}>
+            <span className='inline-flex items-center gap-2'>
+              <LogIn className='h-4 w-4 opacity-60' />
+              登录
+            </span>
+            <ArrowUpRight className='h-4 w-4 opacity-40' />
+          </NavLink>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className='flex items-center'>
+      <NavLink to={ADMIN_ENTRY.to} end className={itemClass}>
+        {({ isActive }) => (
+          <>
+            {ADMIN_ENTRY.label}
+            <span
+              aria-hidden
+              className={cn(
+                'absolute inset-x-3 -bottom-0.5 h-px origin-left bg-gradient-to-r from-flare-500 to-gold-500 transition-transform duration-300 ease-smooth',
+                isActive ? 'scale-x-100' : 'scale-x-0 group-hover:scale-x-100'
+              )}
+            />
+            {isActive ? (
+              <span
+                aria-hidden
+                className='absolute inset-x-3 -bottom-1 h-2 bg-flare-400/25 blur-[6px]'
+              />
+            ) : null}
+          </>
+        )}
+      </NavLink>
+
+      {/* 「与」：把「栏目与网站管理」和「登录」连成需求里写的那一句 */}
+      <span className='px-1 text-sm text-ink-300'>与</span>
+
+      {signedIn ? (
+        <div className='flex items-center gap-2 pl-1'>
+          <span className='num max-w-[14rem] truncate text-xs text-ink-500'>
+            {roleLabel(role)}
+            {account?.displayName ? ` · ${account.displayName}` : ''}
+          </span>
+          <button
+            type='button'
+            onClick={() => {
+              void logout().then(() => navigate('/', { replace: true }));
+            }}
+            className='inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm font-medium text-ink-500 transition-colors hover:bg-ink-50 hover:text-flare-600'
+          >
+            <LogOut className='h-3.5 w-3.5' />
+            退出
+          </button>
+        </div>
+      ) : (
+        <NavLink
+          to='/login'
+          className={({ isActive }) =>
+            cn(
+              'inline-flex items-center gap-1.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
+              isActive ? 'text-flare-600' : 'text-ink-600 hover:bg-flare-50 hover:text-ink-900'
+            )
+          }
+        >
+          <LogIn className='h-3.5 w-3.5' />
+          登录
+        </NavLink>
+      )}
+    </div>
+  );
+}
+
 /** 站点页头：品牌区 + 主导航 + 移动端全屏抽屉 */
 export function SiteHeader() {
   const { settings } = useContent();
-  const { status: authStatus, role, capabilities, account, logout } = useAuth();
-  const navigate = useNavigate();
+  const { status: authStatus, capabilities } = useAuth();
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const location = useLocation();
@@ -69,7 +216,6 @@ export function SiteHeader() {
 
   const visibleNav = NAV_ITEMS.filter((item) => canSee(item.requires));
   const signedIn = authStatus === 'authenticated';
-  const canAdmin = canSee([CAP_MANAGE_CONTENT]);
 
   // 路由切换后自动收起移动端菜单
   useEffect(() => {
@@ -103,7 +249,12 @@ export function SiteHeader() {
           : 'border-b border-transparent bg-white/80 backdrop-blur-sm'
       )}
     >
-      {/* 顶部细条 */}
+      {/*
+        顶部细条。**只保留环境信息**（协会口号、行情入口、学校署名）。
+        成员登录/退出原本也在这里，现已按需求移到主导航栏末尾的
+        「栏目与网站管理 与 登录」——同一件事只应有一个入口，
+        两处并存会让「到底哪个才是登录」变得含糊。
+      */}
       <div className='hidden border-b border-ink-900/[0.06] lg:block'>
         <div className='mx-auto flex max-w-7xl items-center justify-between px-6 py-1.5 text-xs'>
           <span className='truncate text-ink-500'>
@@ -120,50 +271,12 @@ export function SiteHeader() {
             </Link>
             <span className='h-3 w-px bg-ink-900/10' />
             <span className='text-ink-400'>西南财经大学</span>
-
-            {/*
-              顶栏右侧的会话入口。三种状态各有不同呈现：
-              - 未登录：显示「成员登录」；
-              - 已登录且有管理权限：额外显示「内容管理」；
-              - 已登录：显示角色与退出。
-              刻意不显示用户名以外的敏感信息（如有效期），顶栏空间有限，
-              临时账号的到期提醒放在登录页与守卫页展示。
-            */}
             {signedIn ? (
-              <div className='flex items-center gap-4'>
-                {canAdmin ? (
-                  <Link
-                    to='/admin'
-                    className='inline-flex items-center gap-1 text-ink-400 transition-colors hover:text-flare-600'
-                  >
-                    <Settings className='h-3 w-3' />
-                    内容管理
-                  </Link>
-                ) : null}
-                <span className='num text-ink-500'>
-                  {roleLabel(role)}
-                  {account?.displayName ? ` · ${account.displayName}` : ''}
-                </span>
-                <button
-                  type='button'
-                  onClick={() => {
-                    void logout().then(() => navigate('/', { replace: true }));
-                  }}
-                  className='inline-flex items-center gap-1 text-ink-400 transition-colors hover:text-flare-600'
-                >
-                  <LogOut className='h-3 w-3' />
-                  退出
-                </button>
-              </div>
-            ) : (
-              <Link
-                to='/login'
-                className='inline-flex items-center gap-1 text-ink-500 transition-colors hover:text-flare-600'
-              >
-                <LogIn className='h-3 w-3' />
-                成员登录
-              </Link>
-            )}
+              <>
+                <span className='h-3 w-px bg-ink-900/10' />
+                <span className='num text-ink-400'>已登录</span>
+              </>
+            ) : null}
           </div>
         </div>
       </div>
@@ -224,6 +337,14 @@ export function SiteHeader() {
               )}
             </NavLink>
           ))}
+
+          {/*
+            竖线分隔 + 「栏目与网站管理 与 登录」。
+            分隔线的作用是把它从「内容导航」里划出来 —— 它是**工具入口**，
+            与首页/历史沿革/资料这些「读内容」的入口不是一类东西。
+          */}
+          <span aria-hidden className='mx-1.5 h-4 w-px shrink-0 bg-ink-900/15' />
+          <AdminEntryNav variant='desktop' />
         </nav>
 
         <div className='flex items-center gap-2'>
@@ -258,31 +379,32 @@ export function SiteHeader() {
         )}
       >
         <nav className='space-y-1 px-4 py-4'>
-          {[
-            ...visibleNav,
-            ...(canAdmin ? [{ to: '/admin', label: '内容管理', end: false }] : []),
-          ].map(
-            (item, i) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                style={{ transitionDelay: open ? `${i * 45}ms` : '0ms' }}
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center justify-between rounded-xl border px-4 py-3 text-sm font-medium transition-all duration-500 ease-smooth',
-                    open ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0',
-                    isActive
-                      ? 'border-flare-200 bg-flare-50 text-flare-700'
-                      : 'border-ink-900/[0.07] bg-white text-ink-700'
-                  )
-                }
-              >
-                {item.label}
-                <ArrowUpRight className='h-4 w-4 opacity-40' />
-              </NavLink>
-            )
-          )}
+          {visibleNav.map((item, i) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              style={{ transitionDelay: open ? `${i * 45}ms` : '0ms' }}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center justify-between rounded-xl border px-4 py-3 text-sm font-medium transition-all duration-500 ease-smooth',
+                  open ? 'translate-y-0 opacity-100' : 'translate-y-3 opacity-0',
+                  isActive
+                    ? 'border-flare-200 bg-flare-50 text-flare-700'
+                    : 'border-ink-900/[0.07] bg-white text-ink-700'
+                )
+              }
+            >
+              {item.label}
+              <ArrowUpRight className='h-4 w-4 opacity-40' />
+            </NavLink>
+          ))}
+
+          {/* 抽屉里同样以分隔线划出工具入口，与桌面端保持一致的心智模型 */}
+          <div className='pt-2'>
+            <div className='mb-2 h-px bg-ink-900/[0.07]' />
+            <AdminEntryNav variant='mobile' />
+          </div>
         </nav>
       </div>
     </header>
