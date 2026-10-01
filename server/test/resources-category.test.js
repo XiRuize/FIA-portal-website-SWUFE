@@ -15,7 +15,7 @@
  */
 import test, { before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:http';
 import path from 'node:path';
@@ -27,6 +27,19 @@ import { runScan, RESTRICTED_CATEGORIES } from '../src/lib/scan.js';
 import { createEnv, buildConfig } from '../src/lib/env.js';
 
 const ADMIN_PW = 'Fia@Admin2026';
+
+/**
+ * 显式传入的**空**覆写表。
+ *
+ * `runScan` 的 `config.resourceMeta` 省略时会回退到 `loadResourceMeta()` 的默认路径，
+ * 也就是**生产环境**的 `server/data/production-meta.json`。测试若吃到生产覆写表：
+ * 1. 会拿到不该有的数据（本次实测：生产表给 `DeepSeek_DataRoom.rar` 标了「研发部」，
+ *    导致「未标部门时各部门份数应为 0」的断言炸成 1）；
+ * 2. 断言结果会随生产内容的增删而**随机失败** —— 这种漂移比直接失败更难排查。
+ *
+ * 因此凡是有自己夹具的测试，一律显式传空表，把隔离面收紧到极致。
+ */
+const NO_META = {};
 
 let server;
 let baseUrl;
@@ -130,6 +143,9 @@ before(async () => {
   const scanResult = runScan(db, {
     materialsDir: materials,
     restrictedCategories: RESTRICTED_CATEGORIES,
+    // 显式传空表，切断对生产覆写表 server/data/production-meta.json 的默认回退。
+    // 不隔离的话，测试断言会随生产数据的增删而随机失败 —— 详见下方「部门」用例的说明。
+    resourceMeta: NO_META,
   });
   assert.equal(
     scanResult.total,
@@ -339,7 +355,300 @@ test('toPublic 同时给出磁盘目录与展示类目（两者不可混用）',
   assert.equal(epub2.displayCategory, '电子书籍', '同类目应跨目录合并');
 });
 
-/* ───────────────── 要求 3：一周归档 + 按日期切换 ───────────────── */
+/* ───────────────── 部门维度：产出页顶部的纵向筛选 ───────────────── */
+
+/**
+ * 这个夹具文件里**没有**产出作品的部门标注，所以所有产出条目的
+ * `department` 都是空串。这恰好覆盖两个关键边界：
+ * 1. 未标部门的作品必须仍出现在「全部」下（不能被静默丢掉）；
+ * 2. 它们**不得**出现在任何具体部门标签下。
+ *
+ * ⚠️ 为此 `runScan` **必须显式传 `resourceMeta: {}`**。
+ * 不传的话它会退回 `loadResourceMeta()` 的默认路径 —— 那是**生产环境**的
+ * `server/data/production-meta.json`，里面已经标了部门。测试读到生产覆写表，
+ * 既会拿到不该有的部门数据，也会让断言随生产数据变动而随机失败
+ * （本次实测踩过：本文件里 `DeepSeek_DataRoom.rar` 被生产覆写表贴上了「研发部」，
+ *   于是「各部门份数应为 0」的断言炸成了 1）。
+ *
+ * 传空对象是**刻意收紧隔离面**：这条测试要验证的是「未标部门」这个状态本身，
+ * 让外部数据渗进来就测不出任何东西了。常量 `NO_META` 定义在文件顶部。
+ */
+test('部门：资料模块不返回 departments 字段（它没有部门概念）', async () => {
+  const cookie = await loginAs('admin', ADMIN_PW);
+  const r = await call('GET', '/api/resources?limit=200', { cookie });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.data.module, 'library');
+  assert.equal(
+    r.json.data.departments,
+    undefined,
+    '资料模块不应回 departments —— 回一个全 0 数组会诱使前端渲染出没用的空标签'
+  );
+});
+
+test('部门：产出模块返回固定顺序的三个部门，且不含「全部」聚合项', async () => {
+  const cookie = await loginAs('admin', ADMIN_PW);
+  const r = await call('GET', '/api/resources?module=productions&limit=200', { cookie });
+  assert.equal(r.status, 200);
+  assert.deepEqual(
+    r.json.data.departments.map((d) => d.department),
+    ['研发部', '培训部', '宣传中心'],
+    '部门顺序由后端 PRODUCTION_DEPARTMENTS 给定，前端不自行排序'
+  );
+  assert.ok(
+    !r.json.data.departments.some((d) => d.department === '全部'),
+    '「全部」的份数由 total 提供，出现在这里会造成两个来源不一致'
+  );
+  // 空部门也要保留（count = 0），前端标签才齐全、不会因数据缺失而抖动
+  assert.ok(
+    r.json.data.departments.every((d) => typeof d.count === 'number'),
+    '每个部门都要给出数字（可为 0）'
+  );
+});
+
+test('部门：未标部门的作品仍在「全部」下可见，但不进任何部门标签', async () => {
+  const cookie = await loginAs('admin', ADMIN_PW);
+  const all = await call('GET', '/api/resources?module=productions&limit=200', { cookie });
+  assert.ok(all.json.data.total > 0, '夹具里应有产出作品（受限目录，需 admin 会话）');
+
+  assert.ok(
+    all.json.data.departments.every((d) => d.count === 0),
+    `本夹具未标部门，各部门份数应为 0，实际 ${JSON.stringify(all.json.data.departments)}`
+  );
+  assert.ok(
+    all.json.data.items.every((i) => i.department === ''),
+    '未标部门时应回空串，而不是 undefined 或占位文案'
+  );
+});
+
+test('部门：筛选某个部门时只返回该部门的作品', async () => {
+  const cookie = await loginAs('admin', ADMIN_PW);
+  for (const dept of ['研发部', '培训部', '宣传中心']) {
+    const r = await call(
+      'GET',
+      `/api/resources?module=productions&limit=200&department=${encodeURIComponent(dept)}`,
+      { cookie }
+    );
+    assert.equal(r.status, 200);
+    assert.equal(
+      r.json.data.total,
+      0,
+      `本夹具没有「${dept}」的作品，应安静返回空集，而不是回退成全量`
+    );
+  }
+});
+
+test('部门=全部 等价于不按部门过滤', async () => {
+  const cookie = await loginAs('admin', ADMIN_PW);
+  const plain = await call('GET', '/api/resources?module=productions&limit=200', { cookie });
+  const explicit = await call(
+    'GET',
+    `/api/resources?module=productions&limit=200&department=${encodeURIComponent('全部')}`,
+    { cookie }
+  );
+  assert.equal(
+    explicit.json.data.total,
+    plain.json.data.total,
+    '「全部」与不传参数必须是同一口径'
+  );
+});
+
+test('部门：未知部门安静返回空集，不报 500', async () => {
+  const r = await call(
+    'GET',
+    `/api/resources?module=productions&limit=200&department=${encodeURIComponent('不存在的部门')}`
+  );
+  assert.equal(r.status, 200, '未知部门应是空集，不是错误');
+  assert.equal(r.json.data.total, 0);
+});
+
+test('部门：访客视图下不绕过受限裁剪', async () => {
+  const anon = await call('GET', '/api/resources?module=productions&limit=200&department=研发部');
+  assert.equal(anon.status, 200);
+  assert.ok(
+    !anon.json.data.items.some((i) => i.accessLevel === 'member'),
+    '部门筛选不得成为绕过可见性裁决的后门'
+  );
+  // 访客的部门计数同样要按可见性裁剪，不能从计数上看出受限作品规模
+  const anonAll = await call('GET', '/api/resources?module=productions&limit=200');
+  const sumAnon = anonAll.json.data.departments.reduce((s, d) => s + d.count, 0);
+  const cookie = await loginAs('admin', ADMIN_PW);
+  const adminAll = await call('GET', '/api/resources?module=productions&limit=200', { cookie });
+  const sumAdmin = adminAll.json.data.departments.reduce((s, d) => s + d.count, 0);
+  assert.ok(
+    sumAnon <= sumAdmin,
+    `访客看到的部门合计（${sumAnon}）不应超过管理员（${sumAdmin}）`
+  );
+});
+
+/**
+ * 独立夹具：造出「三个部门 + 一条未标部门」四种形态，验证部门的
+ * 归属、计数与筛选真正生效 —— 而不是只验证「没标部门时返回 0」。
+ *
+ * 为什么另起一个库：本文件的 before() 已经锁定了一套「展示类目」夹具，
+ * 往里加部门标注会牵动上面若干条类目断言的数字。部门是独立维度，
+ * 用独立库验证更不容易互相污染。
+ */
+test('部门：独立夹具下按部门归属、计数与筛选都正确', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'fia-dept-'));
+  const materials = path.join(dir, '素材');
+  mkdirSync(path.join(materials, '研发部内部资料'), { recursive: true });
+
+  // 四个产出作品。
+  // ⚠️ 文件名必须能**自动**归类为「社团成员产出」（命中 dataroom / 尽调 / 每日新闻），
+  // 否则第 4 条会被归成资料条目、根本不出现在产出模块里 —— 那样测的就不是部门
+  // 而是覆写表了。这里刻意不靠 displayCategory 覆写来凑。
+  const files = [
+    ['DeepSeek_DataRoom.rar', 'aaa'],
+    ['每日新闻汇总.rar', 'bbb'],
+    ['小红书_DataRoom.zip', 'ccc'],
+    ['尽调资料包.pdf', 'ddd'],
+  ];
+  for (const [name, body] of files) {
+    writeFileSync(path.join(materials, '研发部内部资料', name), Buffer.from(`Rar!\u001a\u0007\u0000 ${body}`));
+  }
+
+  const metaPath = path.join(dir, 'meta.json');
+  writeFileSync(
+    metaPath,
+    JSON.stringify({
+      items: {
+        // 三条各有明确部门
+        '研发部内部资料/DeepSeek_DataRoom.rar': { department: '研发部' },
+        '研发部内部资料/每日新闻汇总.rar': { department: '培训部' },
+        '研发部内部资料/小红书_DataRoom.zip': { department: '宣传中心' },
+        // 第四条**刻意不写 department**：验证未标部门的作品仍在「全部」下
+        '研发部内部资料/尽调资料包.pdf': { tags: ['未标部门'] },
+      },
+    }),
+    'utf8'
+  );
+
+  const dbPath = path.join(dir, 'dept.db');
+  const deptDb = openDatabase(dbPath);
+  try {
+    const metaTable = JSON.parse(readFileSync(metaPath, 'utf8')).items;
+    runScan(deptDb, {
+      materialsDir: materials,
+      restrictedCategories: RESTRICTED_CATEGORIES,
+      resourceMeta: metaTable,
+    });
+
+    const env = createEnv({
+      envFile: path.join(dir, '__no_such_env__'),
+      processEnv: {
+        DB_PATH: dbPath,
+        MATERIALS_DIR: materials,
+        PORT: '0',
+        HOST: '127.0.0.1',
+        COOKIE_NAME: 'fia_session_dept',
+        SESSION_TTL_HOURS_ADMIN: '168',
+        CORS_ORIGINS: '',
+      },
+    });
+    const deptConfig = buildConfig(env);
+    const deptAccounts = createAccountService(deptDb, deptConfig);
+    const pw = 'Fia@Dept2026';
+    await deptAccounts.createAccount({
+      username: 'deptadmin',
+      password: pw,
+      role: ROLE_ADMIN,
+      displayName: '部门测试管理员',
+    });
+    const deptApp = createApp({
+      config: deptConfig,
+      db: deptDb,
+      fingerprintSecret: 'dept-secret',
+    });
+    const deptServer = createServer(deptApp.handler);
+    await new Promise((resolve) => deptServer.listen(0, '127.0.0.1', resolve));
+    const deptBase = `http://127.0.0.1:${deptServer.address().port}`;
+
+    /**
+     * 带会话的请求。
+     *
+     * ⚠️ 必须带 admin 会话：本夹具的产出作品放在「研发部内部资料」里，
+     * 那是 `RESTRICTED_CATEGORIES` 里的受限目录 —— 匿名请求会被后端裁成空集，
+     * 于是「四个作品都应可见」的断言会炸成 0，而失败原因看起来像是「部门没生效」，
+     * 实际是**没登录**。这个假象本次实际踩过一次。
+     */
+    const login = async () => {
+      const res = await fetch(`${deptBase}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: 'deptadmin', password: pw }),
+      });
+      const cookies = res.headers.getSetCookie?.() ?? [];
+      assert.equal(res.status, 200, '独立夹具的登录应成功');
+      assert.ok(cookies.length > 0, '登录应下发 Cookie');
+      return cookies.map((c) => c.split(';')[0]).join('; ');
+    };
+
+    const cookie = await login();
+    const get = async (p) => {
+      const res = await fetch(`${deptBase}${p}`, { headers: { cookie } });
+      return { status: res.status, json: await res.json() };
+    };
+
+    try {
+      const all = await get('/api/resources?module=productions&limit=200');
+      assert.equal(all.status, 200);
+      assert.equal(all.json.data.total, 4, '四个产出作品都应可见');
+
+      const byDept = Object.fromEntries(
+        all.json.data.departments.map((d) => [d.department, d.count])
+      );
+      assert.equal(byDept['研发部'], 1);
+      assert.equal(byDept['培训部'], 1);
+      assert.equal(byDept['宣传中心'], 1);
+      assert.equal(
+        Object.values(byDept).reduce((s, n) => s + n, 0),
+        3,
+        '各部门之和应是 3 —— 未标部门的那条不计入任何部门'
+      );
+
+      // 未标部门的那条：在「全部」下能找到，且 department 为空串
+      const orphan = all.json.data.items.find((i) => i.name === '尽调资料包');
+      assert.ok(orphan, '未标部门的作品必须仍出现在「全部」下，否则等于凭空消失');
+      assert.equal(orphan.department, '');
+
+      // 逐部门筛选：每个部门各回 1 条，且就是自己那条
+      const expected = {
+        研发部: 'DeepSeek_DataRoom',
+        培训部: '每日新闻汇总',
+        宣传中心: '小红书_DataRoom',
+      };
+      for (const [dept, name] of Object.entries(expected)) {
+        const r = await get(
+          `/api/resources?module=productions&limit=200&department=${encodeURIComponent(dept)}`
+        );
+        assert.equal(r.json.data.total, 1, `「${dept}」应恰有 1 条`);
+        assert.equal(r.json.data.items[0].name, name);
+        assert.equal(r.json.data.items[0].department, dept);
+      }
+
+      // 关键反证：按部门筛选时，未标部门的那条**不得**出现在任何部门下
+      for (const dept of ['研发部', '培训部', '宣传中心']) {
+        const r = await get(
+          `/api/resources?module=productions&limit=200&department=${encodeURIComponent(dept)}`
+        );
+        assert.ok(
+          !r.json.data.items.some((i) => i.name === '尽调资料包'),
+          `未标部门的作品混进了「${dept}」`
+        );
+      }
+    } finally {
+      await new Promise((resolve) => deptServer.close(resolve));
+    }
+  } finally {
+    try {
+      deptDb.close();
+    } catch {
+      /* 已关闭 */
+    }
+  }
+});
+
+
 
 test('财经时事：/api/news/dates 返回归档日期与保留天数', async () => {
   const r = await call('GET', '/api/news/dates');

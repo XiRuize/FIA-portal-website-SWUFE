@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS resources (
   summary      TEXT NOT NULL DEFAULT '',
   screenshots  TEXT NOT NULL DEFAULT '[]',
   tags         TEXT NOT NULL DEFAULT '',
+  -- 部门：社团成员产出页面的纵向筛选维度（研发部 / 培训部 / 宣传中心）。
+  -- 与 display_category 是**正交**的两件事：后者决定记录归属哪个模块，
+  -- 前者只在产出模块内部再切一刀。允许空串（未标部门的作品仍在「全部」下）。
+  department   TEXT NOT NULL DEFAULT '',
   sort_index   INTEGER NOT NULL DEFAULT 100,
   created_at   TEXT NOT NULL,
   updated_at   TEXT NOT NULL
@@ -243,6 +247,17 @@ function ensureColumns(db) {
     ['resources', 'screenshots', "TEXT NOT NULL DEFAULT '[]'"],
     // 标签：逗号分隔（与文章表的 tags 口径一致）
     ['resources', 'tags', "TEXT NOT NULL DEFAULT ''"],
+    // 部门：社团成员产出页面的**纵向筛选**维度（研发部 / 培训部 / 宣传中心）。
+    //
+    // ⚠️ 它不是展示类目。展示类目 `display_category` 决定一条记录属于
+    // 「资料与数据」还是「社团成员产出」两个模块（模块隔离的依据）；
+    // 部门只在**已确定属于产出模块**的记录内部再切一刀。
+    // 两者混用会让模块隔离失效 —— 详见 categorize.js 的 PRODUCTION_DEPARTMENTS 注释。
+    //
+    // 允许空串：未标部门的作品仍出现在「全部」下，只是不进任何部门标签。
+    // 因此这里**不能**加 CHECK 约束限制取值 —— 约束会把未来的新部门挡在门外，
+    // 而部门构成是会随协会组织架构调整的。
+    ['resources', 'department', "TEXT NOT NULL DEFAULT ''"],
 
     // ---- accounts：账号来源与手机号 ----
     //

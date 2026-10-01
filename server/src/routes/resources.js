@@ -242,6 +242,12 @@ export function createResourceRoutes(ctx) {
         module,
         category,
         displayCategory: url.searchParams.get('displayCategory') || undefined,
+        /**
+         * 部门 —— 「社团成员产出」页面顶部的纵向筛选。
+         * 与 displayCategory 正交：后者决定记录归属哪个模块（两者共用一张表），
+         * 前者只在产出模块内部按部门再切一刀。
+         */
+        department: url.searchParams.get('department') || undefined,
         ext: url.searchParams.get('ext') || undefined,
         kind: url.searchParams.get('kind') || undefined,
         sort: url.searchParams.get('sort') || undefined,
@@ -270,10 +276,22 @@ export function createResourceRoutes(ctx) {
           module,
           sort: url.searchParams.get('sort') || 'newest',
           displayCategory: url.searchParams.get('displayCategory') || ALL_CATEGORY,
+          /** 本次生效的部门筛选；未传即「全部」 */
+          department: url.searchParams.get('department') || ALL_CATEGORY,
           restricted,
           canViewRestricted,
           summary: resources.summary(scope),
           categories: resources.categorySummary(scope),
+          /**
+           * 部门清单（含各自份数）—— 只对产出模块有意义。
+           *
+           * 刻意**不给资料模块**回这个字段：资料条目没有部门概念，
+           * 回一个全 0 的数组只会诱使前端渲染出一排没用的空标签。
+           * 「全部」不在这个数组里，它的份数就用上面的 total —— 单一来源，
+           * 不会出现「标签写 12、列表渲染 11」这种对不上的情况。
+           */
+          departments:
+            module === 'productions' ? resources.departmentSummary(scope) : undefined,
         },
         200,
         ctx.cors

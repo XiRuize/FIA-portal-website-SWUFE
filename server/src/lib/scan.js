@@ -100,6 +100,18 @@ function normalizeMeta(entry) {
   const accessLevel = ['public', 'member'].includes(str(entry.accessLevel))
     ? str(entry.accessLevel)
     : '';
+  /**
+   * 部门覆写（可选）。
+   *
+   * 「社团成员产出」页面顶部有一条部门导航（研发部 / 培训部 / 宣传中心），
+   * 它按本字段筛选。这里**不做白名单校验**：部门的构成会随协会组织架构调整，
+   * 写死一份名单会让新部门要改代码才能上线；而且部门只是产页内部的筛选维度，
+   * 取值超出预期最多是标签多一个，不会像 `access_level` 那样影响权限判定
+   * （那一列有 CHECK 约束，写错会让整次扫描事务回滚 —— 见上面的注释）。
+   *
+   * 留空表示「未标部门」：这类作品出现在「全部」下，但不进任何具体部门标签。
+   */
+  const department = str(entry.department);
   return {
     displayCategory: str(entry.displayCategory),
     title: str(entry.title),
@@ -110,6 +122,7 @@ function normalizeMeta(entry) {
     tags,
     screenshots: JSON.stringify(shots),
     accessLevel,
+    department,
   };
 }
 
@@ -290,8 +303,8 @@ export function runScan(db, config) {
     INSERT INTO resources
       (rel_path, name, file_name, category_dir, display_category, ext, size_bytes,
        mtime, kind, access_level, sort_index, created_at, updated_at,
-       author, author_title, author_note, summary, screenshots, tags)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 100, ?, ?, ?, ?, ?, ?, ?, ?)
+       author, author_title, author_note, summary, screenshots, tags, department)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 100, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(rel_path) DO UPDATE SET
       name = excluded.name,
       file_name = excluded.file_name,
@@ -308,7 +321,8 @@ export function runScan(db, config) {
       author_note = excluded.author_note,
       summary = excluded.summary,
       screenshots = excluded.screenshots,
-      tags = excluded.tags
+      tags = excluded.tags,
+      department = excluded.department
   `);
 
   let inserted = 0;
@@ -351,7 +365,8 @@ export function runScan(db, config) {
         meta?.authorNote ?? '',
         meta?.summary ?? '',
         meta?.screenshots ?? '[]',
-        meta?.tags ?? ''
+        meta?.tags ?? '',
+        meta?.department ?? ''
       );
       if (before) updated += 1;
       else inserted += 1;

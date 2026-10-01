@@ -13,6 +13,7 @@ import {
   MODULES,
   NON_LIBRARY_DIRS,
   PRODUCTION_CATEGORY,
+  PRODUCTION_DEPARTMENTS,
   isLibraryItem,
 } from './categorize.js';
 
@@ -321,6 +322,13 @@ export function createResourceService(db, config) {
       authorNote: String(row.author_note ?? ''),
       summary: String(row.summary ?? ''),
       tags: splitTags(row.tags),
+      /**
+       * 部门（研发部 / 培训部 / 宣传中心）—— 「社团成员产出」页面顶部的
+       * **纵向筛选**维度。与 `displayCategory` 正交：后者决定这条记录属于
+       * 「资料与数据」还是「社团成员产出」（模块隔离），前者只在产出模块内部再切一刀。
+       * 空串 = 未标部门，这类作品在「全部」下可见，但不进任何具体部门标签。
+       */
+      department: String(row.department ?? ''),
       screenshots: resolveScreenshots(row.screenshots),
       mimeType: MIME_BY_EXT[String(row.ext)] ?? 'application/octet-stream',
       /** 可直接在浏览器内联预览（PDF / 图片 / 文本） */
@@ -383,6 +391,19 @@ export function createResourceService(db, config) {
       if (query.displayCategory && query.displayCategory !== ALL_CATEGORY) {
         where.push('r.display_category = ?');
         params.push(query.displayCategory);
+      }
+      /**
+       * 部门过滤 —— **「社团成员产出」页面专属的纵向维度**。
+       *
+       * 刻意不加进展示类目体系：那个维度是模块隔离的依据
+       * （`moduleScope()` 靠它把资料与产出分开），一旦掺进部门，
+       * 「全部 = 各类之和」的口径会崩，两个页面也会互相串台。
+       *
+       * 传「全部」/ 省略 = 不按部门过滤；未标部门的作品因此只出现在「全部」下。
+       */
+      if (query.department && query.department !== ALL_CATEGORY) {
+        where.push('r.department = ?');
+        params.push(query.department);
       }
       if (query.ext) {
         where.push('r.ext = ?');
@@ -538,8 +559,7 @@ export function createResourceService(db, config) {
       return this.toPublic(row, liked);
     },
 
-    /**
-     * 按 id 取**数据库原始行**（不做公开字段映射）。
+    /** 按 id 取**数据库原始行**（不做公开字段映射）。
      *
      * 路由层做准入判定时需要 `access_level` 这个原始字段，
      * 而 `getById` 返回的是 `toPublic` 映射后的对象，不宜用于鉴权判断。
@@ -605,6 +625,52 @@ export function createResourceService(db, config) {
     /** 重建全部点赞统计（扫描脚本调用） */
     rebuildLikeStats() {
       stmt.rebuildStats.run();
+    },
+
+    /**
+     * 部门统计（供「社团成员产出」页面的部门导航渲染数量）。
+     *
+     * 与 `categorySummary` 的三点差异，都是刻意的：
+     * 1. **口径独立**：部门是产页专属的纵向维度，不能混进展示类目的
+     *    「全部 = 各类之和」体系 —— 那个体系是模块隔离的依据。
+     * 2. **顺序取自常量、空部门不占位**：`PRODUCTION_DEPARTMENTS` 给出
+     *    研发部 / 培训部 / 宣传中心 的固定顺序（与前端标签顺序一致），
+     *    而**未标部门**的作品不进任何标签，因此这里没有任何「其他」兜底项。
+     * 3. **不返回「全部」聚合项**：前端本就要展示「全部」，但它的数字取自
+     *    列表接口的 `total`。这里再回一个「全部」会让前端面对两个来源、
+     *    迟早出现「标签写 12、卡片区渲染 11」的对不上。
+     *
+     * @param {{ module?: string, excludeAccessLevel?: string }} [query]
+     * @returns {Array<{ department: string, count: number }>}
+     */
+    departmentSummary(query = {}) {
+      const params = [];
+      const scope = moduleScope(query.module);
+      let where = `WHERE ${scope.sql} AND department != ''`;
+      params.push(scope.param);
+      if (query.excludeAccessLevel) {
+        where += ' AND access_level != ?';
+        params.push(query.excludeAccessLevel);
+      }
+      const rows = plainAll(
+        db
+          .prepare(
+            `SELECT department, category_dir, COUNT(*) AS count
+             FROM resources r ${where}
+             GROUP BY department, category_dir`
+          )
+          .all(...params)
+      ).filter((r) => isLibraryItem(r.category_dir));
+
+      const byDept = new Map();
+      for (const r of rows) {
+        const key = String(r.department);
+        byDept.set(key, (byDept.get(key) ?? 0) + Number(r.count));
+      }
+      return PRODUCTION_DEPARTMENTS.map((name) => ({
+        department: name,
+        count: byDept.get(name) ?? 0,
+      }));
     },
 
     /**

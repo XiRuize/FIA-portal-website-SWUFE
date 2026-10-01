@@ -104,6 +104,9 @@ before(async () => {
   const scanResult = runScan(db, {
     materialsDir: materials,
     restrictedCategories: RESTRICTED_CATEGORIES,
+    // 显式传空覆写表：省略会退回**生产环境**的 server/data/production-meta.json，
+    // 让测试结果随生产内容的增删而漂移。夹具测试一律自己做主。
+    resourceMeta: {},
   });
   assert.ok(scanResult.total >= 2, `扫描应至少入库 2 条，实际 ${scanResult.total}`);
 

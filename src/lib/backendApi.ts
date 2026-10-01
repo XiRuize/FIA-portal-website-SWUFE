@@ -337,6 +337,15 @@ export interface ResourceItem {
   tags: string[];
   /** 作品截图 / 报表预览（已由后端解析为受控的预览地址） */
   screenshots: Array<{ url: string; caption: string }>;
+  /**
+   * 部门（研发部 / 培训部 / 宣传中心）—— 「社团成员产出」页面顶部的
+   * **纵向筛选**维度，与 `displayCategory` 正交。
+   *
+   * `displayCategory` 决定这条记录属于「资料与数据」还是「社团成员产出」
+   * （模块隔离的依据）；`department` 只在产出模块内部再切一刀。
+   * 空串 = 未标部门，这类作品在「全部」下可见，但不进任何具体部门标签。
+   */
+  department: string;
 }
 
 /**
@@ -374,6 +383,8 @@ export interface ResourceListResult {
   module?: ResourceModule;
   /** 本次请求生效的展示类目 */
   displayCategory?: string;
+  /** 本次请求生效的部门筛选；未传即「全部」。仅产出模块有意义 */
+  department?: string;
   /** 当前会话是否具备查看受限资料的权限 */
   canViewRestricted?: boolean;
   /** 被过滤掉的受限条目数（匿名访客时 > 0） */
@@ -381,6 +392,25 @@ export interface ResourceListResult {
   summary?: { total: number; bytes: number; sizeText: string; categories?: number };
   /** 当前会话能看到的分类（受限分类对匿名访客不出现） */
   categories: ResourceCategory[];
+  /**
+   * 部门清单（含各自份数）。**只有产出模块会返回**，资料模块是 `undefined`。
+   *
+   * 不含「全部」聚合项 —— 它的份数由 `total` 提供，单一来源，
+   * 避免出现「标签写 12、列表渲染 11」这种对不上的情况。
+   */
+  departments?: ResourceDepartment[];
+}
+
+/**
+ * 「社团成员产出」的部门筛选维度。
+ *
+ * 与展示类目是两回事：展示类目决定记录属于哪个**模块**（资料 / 产出），
+ * 部门只在产出模块内部再切一刀。顺序由后端 `PRODUCTION_DEPARTMENTS` 给定，
+ * 前端不自行排序，两端保持一致。
+ */
+export interface ResourceDepartment {
+  department: string;
+  count: number;
 }
 
 /** 排序方式 */
@@ -403,6 +433,11 @@ export const resourcesApi = {
     category?: string;
     /** 展示类目过滤；传「全部」或省略即不按类目过滤 */
     displayCategory?: string;
+    /**
+     * 部门过滤（「社团成员产出」页面的纵向维度）。
+     * 传「全部」或省略即不按部门过滤 —— 未标部门的作品只在这些情况下出现。
+     */
+    department?: string;
     sort?: ResourceSort;
     /** 只返回需要登录的资料（受限视图） */
     restricted?: boolean;
@@ -415,6 +450,7 @@ export const resourcesApi = {
         module: params.module,
         category: params.category,
         displayCategory: params.displayCategory,
+        department: params.department,
         sort: params.sort,
         restricted: params.restricted ? 1 : undefined,
         page: params.page,

@@ -315,6 +315,69 @@ async function main() {
       );
     });
 
+    await check('department 列已存在（老库升级路径）', () => {
+      const cols = db.prepare('PRAGMA table_info(resources)').all();
+      const has = cols.some((c) => String(c.name) === 'department');
+      if (!has) {
+        throw new Error(
+          'resources 表缺少 department 列。它是「社团成员产出」页面部门导航的筛选依据，' +
+            '由 openDatabase 的 ensureColumns 自动补 —— 这里缺失说明建库路径绕过了它'
+        );
+      }
+      return '已就绪';
+    });
+
+    /**
+     * 部门是「社团成员产出」页面顶部的纵向筛选维度。
+     *
+     * 这里只做**软校验**（不通过即 info 提示而非失败）：部门归属依赖人工在
+     * production-meta.json 里标注，素材刚入库时确实可能一条都没标。
+     * 硬失败会让「新增一个还没归部门的作品」直接卡住自检，得不偿失。
+     * 真正不能出错的是**口径**：部门不得混进展示类目体系 —— 那条下面单独校验。
+     */
+    await check('产出作品的部门标注（软校验，允许为空）', () => {
+      const prodRows = db
+        .prepare("SELECT department, COUNT(*) AS n FROM resources WHERE display_category = '社团成员产出' GROUP BY 1")
+        .all();
+      const total = prodRows.reduce((s, r) => s + Number(r.n), 0);
+      if (total === 0) return '产出模块暂无条目';
+
+      const labelled = prodRows.filter((r) => String(r.department ?? '') !== '');
+      const unlabelled = total - labelled.reduce((s, r) => s + Number(r.n), 0);
+      const detail = labelled.map((r) => `${r.department} ${r.n}`).join(' / ') || '（无）';
+
+      if (unlabelled > 0) {
+        info(
+          '未标部门的产出',
+          `${unlabelled} 条将在产出页只出现在「全部」下、不进任何部门标签。` +
+            '如需归类，在 server/data/production-meta.json 里补 department 字段后重新扫描'
+        );
+      }
+      return `${detail}；未标部门 ${unlabelled} 条 / 共 ${total} 条`;
+    });
+
+    /**
+     * 反向校验：部门**不得**出现在展示类目里。
+     *
+     * 展示类目是模块隔离的依据（`moduleScope()` 靠它把「资料与数据」与
+     * 「社团成员产出」分开），一旦把部门当类目写进去，
+     * 「全部 = 各类之和」的口径会崩，两个页面还会互相串台。
+     */
+    await check('部门未被误当作展示类目（两个维度必须正交）', () => {
+      const bad = db
+        .prepare(
+          "SELECT display_category, COUNT(*) AS n FROM resources WHERE display_category IN ('研发部','培训部','宣传中心') GROUP BY 1"
+        )
+        .all();
+      if (bad.length > 0) {
+        throw new Error(
+          `部门名出现在了 display_category 里：${bad.map((b) => `${b.display_category}(${b.n})`).join(', ')}。` +
+            '部门是产出模块内部的纵向筛选，不能进展示类目体系'
+        );
+      }
+      return '展示类目只含模块级类目，部门走独立字段';
+    });
+
     await check('展示类目统计与明细自洽', () => {
       const rows = db
         .prepare('SELECT category_dir, display_category FROM resources')
