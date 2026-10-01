@@ -1,0 +1,59 @@
+[Unit]
+Description=西南财经大学金融投资协会官网后端 (swufe-fia-backend)
+Documentation=https://github.com/your-org/fia-site
+After=network-online.target
+Wants=network-online.target
+
+# 崩溃循环保护：5 分钟内重启超过 10 次就停下，避免日志被刷爆。
+# ⚠️ 这两项属于 [Unit] 段。写在 [Service] 里会被 systemd 静默忽略
+#    （不报错、不生效），表现是「服务疯狂重启却没人拦」。
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+
+# ⚠️ 换成你实际部署代码的目录，必须是绝对路径。
+#    下面以 /var/www/fia/current 为例（软链接指向某一版发布目录）。
+WorkingDirectory=/var/www/fia/current/server
+
+# 后端零运行时第三方依赖，直接用系统 node 即可。
+# 若用 nvm 安装，把 ExecStart 换成 nvm 下的绝对路径，
+# 例如 /root/.nvm/versions/node/v22.22.2/bin/node。
+# （注意 systemd 不读 .bashrc，nvm 的 shim 在这里找不到。）
+ExecStart=/usr/bin/node src/index.js
+
+# ---- 环境变量 ----
+# 敏感值（FINGERPRINT_SECRET 等）写在 EnvironmentFile 里，不要写进本文件，
+# 因为本文件会进版本库。server/.env 由 env.js 自行解析，二者取并集、
+# 真实环境变量优先。
+EnvironmentFile=-/var/www/fia/current/server/.env
+Environment=NODE_ENV=production
+Environment=PORT=8787
+# ⚠️ 只绑回环：后端不与公网直接接触，所有外部流量经 Nginx 转发。
+Environment=HOST=127.0.0.1
+# ⚠️ 挂在 Nginx 之后必须打开，否则登录限流拿不到真实客户端 IP，
+#    所有访客会共用一个限流桶（几个人连续输错密码就全站锁死）。
+Environment=TRUST_PROXY=true
+# ⚠️ 线上是 HTTPS，必须为 true。开了它但没有 HTTPS →
+#    会话 Cookie 带 Secure 属性发不出去，表现为「登录成功但刷新即掉线」。
+Environment=COOKIE_SECURE=true
+
+Restart=always
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fia-backend
+
+# ---- 安全加固 ----
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=false
+# 素材目录与数据库在项目目录内，需要读写权限，
+# 因此不开 ProtectHome=true 且不设 ReadWritePaths 限制。
+ReadWritePaths=/var/www/fia
+
+[Install]
+WantedBy=multi-user.target

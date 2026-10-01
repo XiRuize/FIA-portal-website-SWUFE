@@ -53,6 +53,20 @@ cd server && npm run verify       # 一键自检
 | 后端路由 | `server/src/routes/*.js` |
 | 后端服务层 | `server/src/lib/*.js` |
 | 后端测试 | `server/test/*.test.js` |
+| 部署资产 | `deploy/`（Nginx / systemd / 脚本 / 上线手册，见 `deploy/README.md`） |
+
+## Deployment
+
+生产环境是**一台境内云服务器 + Nginx + systemd**，不是静态托管
+（后端是常驻进程且持有 SQLite，Vercel/Netlify/GitHub Pages 跑不了）。
+
+- 首次部署、日常发版、故障排查：**照 `deploy/README.md` 执行**，不要另起一套。
+- `deploy/env.example` 是后端生产配置的公开样本（`.gitignore` 已显式放行）。
+  真实 `server/.env` 含密钥，**绝不入库**。
+- 生产三项硬约束：`HOST=127.0.0.1`、`TRUST_PROXY=true`、`COOKIE_SECURE=true`。
+  第三项与 HTTPS 必须同步 —— 开了它却没有 HTTPS，表现为「登录成功但刷新掉线」。
+- 素材目录（226 MB）**不在 git 里**，部署时须单独上传；漏传则资料库为空。
+- 改了后端代码**必须重启后端进程**，`deploy/deploy.sh` 已包含这一步。
 
 ## 硬性约定
 
