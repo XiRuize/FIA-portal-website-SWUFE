@@ -14,6 +14,32 @@
 
 ---
 
+## 零之前：整条时间线的正确顺序
+
+**备案是唯一的长尾（10–20 工作日），所以它必须最先启动。** 其余步骤都能在等待期并行完成。
+
+```
+第 1 天   买服务器（境内·成都节点）+ 当天提交 ICP 备案  ← 关键路径起点
+          │
+等待期    ├─ 初始化服务器（装 Node/Nginx/防火墙）—— 不碰 80/443，不受备案限制
+（10–20   ├─ 上传代码 + 上传素材目录（226 MB）
+ 工作日） ├─ 配 server/.env + 注册 systemd 服务
+          ├─ 配 Nginx（域名已填好，可直接拷）
+          ├─ 【可做】用 IP + 临时 Host 头内网验证后端是否起得来
+          └─ 首次部署 deploy.sh（建库播种、扫素材）
+          │
+备案通过  ├─ 加 DNS 解析（@ 与 www 各一条 A 记录指向服务器 IP）
+          ├─ certbot 签 HTTPS 证书
+          └─ 逐项验证（见第八节）
+          │
+通过后 30天内  公安联网备案（法定义务，易漏）
+```
+
+⚠️ 等待期不要试图用 IP 直接访问站点 —— 境内未备案的 80/443 是被封的，
+`http://<IP>` 打不开是**预期行为**，不代表配错了。
+
+---
+
 ## 零、先看懂这套架构
 
 这个项目**不是纯静态站**，这决定了它不能托管在 Vercel / Netlify / GitHub Pages 上。
@@ -37,30 +63,28 @@
 
 ---
 
-## 一、买域名
+## 一、域名（已完成）
 
-### 在哪买
+本项目域名已确定为 **`fia2002.cn`**，另有 `www.fia2002.cn` 作为别名一并接入。
 
-| 渠道 | 说明 |
-| --- | --- |
-| 腾讯云 / 阿里云 / 华为云 | 推荐。域名与服务器同平台，备案流程自动关联，省事 |
-| 校园渠道 | 部分高校有教育网域名额度，需学校信息中心审批，周期长 |
+> 若将来换域名，需同步改三处：`deploy/nginx/fia.conf`、`deploy/env.example`（`CORS_ORIGINS`）、
+> 以及本手册里的示例命令。
 
-### 买什么样的
+### 买什么样的（备查）
 
 | 项 | 建议 |
 | --- | --- |
-| 后缀 | **`.com`**（约 ¥65/年）或 **`.cn`**（约 ¥29/年） |
-| 名称 | 短、好念、与社团相关，如 `fia-swufe.com`、`swufefia.cn` |
+| 后缀 | **`.cn`**（约 ¥29/年）或 `.com`（约 ¥65/年） |
+| 名称 | 短、好念、与社团相关 —— `fia2002.cn` 中的 2002 即协会成立年份 |
 | 年限 | 建议直接买 3 年，省得年年操心续费 |
 | 隐私保护 | 开启（免费），避免注册人姓名/手机号被公开查询 |
 
 ⚠️ **不要买 `.edu.cn`**。该后缀需要**西南财经大学官方主体资质**（事业单位法人证书等），学生社团无法以自身名义申请。如果希望能用 `edu.cn` 域名，需要走学校信息中心，由学校作为主体申请。
 
-### 买完立刻做两件事
+### 域名侧要做的两件事
 
-1. **实名认证**（腾讯云/阿里云的要求），未实名会被暂停解析。
-2. **决定用不用 `www`**。建议主域名用不带 www 的（`fia-swufe.com`），并把 `www.fia-swufe.com` 也解析过去做跳转 —— Nginx 配置里已经写好两个都接。
+1. **实名认证**（腾讯云/阿里云的要求），未实名会被暂停解析。`.cn` 域名实名是强制前置条件。
+2. **两条解析都加上**：`@` 与 `www` 各一条 A 记录，都指向服务器公网 IP —— Nginx 配置里两个 `server_name` 都接了。
 
 ---
 
@@ -207,7 +231,7 @@ HOST=127.0.0.1          # 只绑回环，后端不与公网直接接触
 TRUST_PROXY=true        # 挂在 Nginx 之后必须开，否则登录限流拿不到真实 IP
 COOKIE_SECURE=true      # 线上是 HTTPS 必须开，否则登录后刷新即掉线
 MATERIALS_DIR=../资料分享模块素材    # 确认路径正确
-CORS_ORIGINS=https://你的域名,https://www.你的域名
+CORS_ORIGINS=https://fia2002.cn,https://www.fia2002.cn
 ```
 
 ⚠️ **`COOKIE_SECURE=true` 和 HTTPS 必须同步**。开了它但没有 HTTPS，浏览器会拒收会话 Cookie，表现是「登录成功，一刷新就退回未登录」—— 这个现象很容易被误判成后端 bug。
@@ -251,13 +275,9 @@ sudo cp deploy/nginx/fia.conf /etc/nginx/sites-available/fia.conf
 sudo nano /etc/nginx/sites-available/fia.conf
 ```
 
-把文件里**所有** `<你的域名>` 替换成实际域名（有两处 `server_name`、两行证书路径）。可以用 `sed` 一次改完：
+`fia.conf` 里的域名**已经填好 `fia2002.cn`**（含 `www` 变体与证书路径），直接拷过去即可，无需再改。
 
-```bash
-sudo sed -i 's/<你的域名>/fia-swufe.com/g' /etc/nginx/sites-available/fia.conf
-```
-
-⚠️ 证书路径那两行此时指向的文件还不存在，`nginx -t` 会报错。**先注释掉这两行和 `ssl_certificate*`**，等第 6 步签证书时 certbot 会自动补上：
+⚠️ 证书路径那两行此时指向的文件还不存在，`nginx -t` 会报错。**先注释掉这两行和 `ssl_certificate*`**，等第 7 步签证书时 certbot 会自动补上：
 
 ```bash
 # 临时注释：
@@ -332,14 +352,14 @@ Cookie Secure : true（需 HTTPS）
 
 ```bash
 # 在本地 Windows 或服务器上执行，应输出你的服务器 IP
-nslookup fia-swufe.com
+nslookup fia2002.cn
 ```
 
 ### 7.2 签证书
 
 ```bash
 sudo apt install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d fia-swufe.com -d www.fia-swufe.com
+sudo certbot --nginx -d fia2002.cn -d www.fia2002.cn
 ```
 
 certbot 会：验证域名归属 → 签发证书 → **自动改写 Nginx 配置**（补上第 5 步注释掉的 `ssl_certificate` 行）→ 配置 80→443 跳转。
@@ -358,7 +378,7 @@ sudo certbot renew --dry-run
 
 ## 八、逐项验证
 
-浏览器打开 `https://fia-swufe.com`，按顺序检查：
+浏览器打开 `https://fia2002.cn`，按顺序检查：
 
 | # | 检查项 | 期望结果 | 不通过的常见原因 |
 | --- | --- | --- | --- |
@@ -375,7 +395,7 @@ sudo certbot renew --dry-run
 
 ```bash
 # 经 Nginx 的完整链路
-curl -s https://fia-swufe.com/api/health | head -c 200
+curl -s https://fia2002.cn/api/health | head -c 200
 
 # 确认后端没暴露在公网（应超时或拒绝连接）
 curl -s --max-time 5 http://<公网IP>:8787/api/health && echo "⚠️ 8787 暴露了！" || echo "✓ 8787 未暴露"

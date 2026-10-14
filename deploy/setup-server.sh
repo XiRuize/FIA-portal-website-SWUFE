@@ -124,6 +124,6 @@ ${C_OK}服务器初始化完成。${C_RESET}
   4. 配 Nginx：把 deploy/nginx/fia.conf 放到 /etc/nginx/sites-available/
   5. 注册 systemd：把 deploy/systemd/fia-backend.service 放到 /etc/systemd/system/
   6. 首次部署：bash deploy/deploy.sh
-  7. 申请证书：certbot --nginx -d <你的域名>
+  7. 申请证书：certbot --nginx -d fia2002.cn -d www.fia2002.cn
 
 EOF
