@@ -37,10 +37,10 @@ import { createThrottles, createThrottle } from '../src/lib/throttle.js';
 import { sanitizeFileName, resolveUploadTarget } from '../src/routes/resources.js';
 import { buildAccessNotificationText } from '../src/lib/access.js';
 
-const ADMIN_USER = '<已清除>';
+const ADMIN_USER = 'fia_test_admin';
 const ADMIN_PW = 'Fia@Admin2026';
 const VIEWER_USER = 'guest';
-const VIEWER_PW = '<已清除>';
+const VIEWER_PW = 'TestViewer@2026x';
 const APPLICANT_PHONE = '13800001111';
 
 /** 管理员会话 Cookie 值（供各用例复用，避免重复登录） */

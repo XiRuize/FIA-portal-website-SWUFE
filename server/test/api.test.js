@@ -24,7 +24,7 @@ import { runScan, RESTRICTED_CATEGORIES } from '../src/lib/scan.js';
 import { createEnv, buildConfig } from '../src/lib/env.js';
 
 const ADMIN_PW = 'Fia@Admin2026';
-const VIEWER_PW = '<已清除>';
+const VIEWER_PW = 'TestViewer@2026x';
 
 let server;
 let baseUrl;

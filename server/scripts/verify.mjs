@@ -114,6 +114,17 @@ async function main() {
 
   const env = createEnv();
   const config = buildConfig(env);
+
+  // -------------------------------------------------------------------------
+  // 管理账号凭据：从 .env 读取，**没有默认值**
+  //
+  // 历史上这两条检查硬编码了一个公开的评审账号口令。现在管理员口令由部署者
+  // 设置，因此改为「配置了才校验」：未配置时明确标记为跳过，而不是拿一个
+  // 写死的口令去比对 —— 那在生产环境必然失败，且会误导人以为部署有问题。
+  // -------------------------------------------------------------------------
+  const seedAdminUser = String(env.get('SEED_ADMIN_USERNAME', '')).trim();
+  const seedAdminPass = String(env.get('SEED_ADMIN_PASSWORD', ''));
+  const seedAdminConfigured = Boolean(seedAdminUser && seedAdminPass);
   if (portOverride !== null && Number.isFinite(portOverride)) config.port = portOverride;
 
   // ---- 1. 环境与配置 -----------------------------------------------------
@@ -181,26 +192,36 @@ async function main() {
     });
 
     /**
-     * 需求：账号 <已清除> 拥有管理权限，口令为 <已清除>，登录后应能进入「社团成员产出」。
+     * 需求：管理员账号拥有管理权限，登录后应能进入「社团成员产出」。
      *
      * 这里只做**库级**判定（账号存在 + 角色 + 口令可校验 + 未过期/未吊销）。
      * 真正的端到端登录放在下面的 HTTP 段，因为那是唯一能证明
      * 「口令 → 会话 → 能力列表 → 受限数据」整条链路通的地方。
+     *
+     * ⚠️ 账号与口令取自 .env 的 SEED_ADMIN_USERNAME / SEED_ADMIN_PASSWORD。
+     *    本项目不内置默认管理员口令，因此未配置时这一项标记为「跳过」。
      */
-    await check('演示账号 <已清除> 存在且为管理权限（口令可校验）', () => {
-      const row = db
-        .prepare("SELECT * FROM accounts WHERE username = '<已清除>' AND revoked_at IS NULL")
-        .get();
-      if (!row) throw new Error('未找到 <已清除> 账号，请运行 npm run seed');
-      if (String(row.role) !== 'admin') throw new Error(`角色应为 admin，实际为 ${row.role}`);
-      if (!verifyPassword('<已清除>', String(row.password_hash))) {
-        throw new Error('<已清除> 的存储哈希无法用口令 <已清除> 校验通过');
-      }
-      if (row.expires_at && new Date(String(row.expires_at)).getTime() <= Date.now()) {
-        throw new Error('该账号已过期');
-      }
-      return `角色 admin，口令 <已清除> 校验通过${row.expires_at ? `，到期 ${row.expires_at}` : '（无到期时间）'}`;
-    });
+    if (!seedAdminConfigured) {
+      info(
+        '管理账号口令校验（已跳过）',
+        '未在 .env 配置 SEED_ADMIN_USERNAME / SEED_ADMIN_PASSWORD，无凭据可校验'
+      );
+    } else {
+      await check(`管理账号 ${seedAdminUser} 存在且为管理权限（口令可校验）`, () => {
+        const row = db
+          .prepare('SELECT * FROM accounts WHERE username = ? AND revoked_at IS NULL')
+          .get(seedAdminUser);
+        if (!row) throw new Error(`未找到 ${seedAdminUser} 账号，请运行 npm run seed`);
+        if (String(row.role) !== 'admin') throw new Error(`角色应为 admin，实际为 ${row.role}`);
+        if (!verifyPassword(seedAdminPass, String(row.password_hash))) {
+          throw new Error(`${seedAdminUser} 的存储哈希无法用 .env 中的口令校验通过`);
+        }
+        if (row.expires_at && new Date(String(row.expires_at)).getTime() <= Date.now()) {
+          throw new Error('该账号已过期');
+        }
+        return `角色 admin，口令校验通过${row.expires_at ? `，到期 ${row.expires_at}` : '（无到期时间）'}`;
+      });
+    }
 
     await check('资料表有条目', () => {
       const row = db.prepare('SELECT COUNT(*) AS n FROM resources').get();
@@ -522,7 +543,7 @@ async function main() {
       //    原因是失败计数是按 `u:<账号>` 与 `ip:<IP>` 两个维度累加的，verify 在同一台机器上
       //    反复运行时 IP 维度会攒够 5 次失败并锁定 15 分钟 —— 但 `accounts.login` 是在
       //    **校验口令之前**就查锁定，所以锁定期间连正确口令也会被挡在 429，
-      //    紧接着的「<已清除> 可登录」那条检查就会莫名其妙地失败。
+      //    紧接着的「管理账号可登录」那条检查就会莫名其妙地失败。
       //    用一个每次带随机后缀的账号名，既保留了「失败不下发 cookie」的断言，
       //    也不会污染真实账号的失败计数。
       await check('错误口令被拒（401，且不下发会话 cookie）', async () => {
@@ -537,49 +558,58 @@ async function main() {
         return `HTTP 401 · code=${r.json?.error?.code ?? 'n/a'}`;
       });
 
-      // --- 「社团成员产出」的准入链路：<已清除> 登录后必须真的能拿到受限数据 ---
+      // --- 「社团成员产出」的准入链路：管理账号登录后必须真的能拿到受限数据 ---
       //
-      // 这条检查覆盖的是需求的核心断言：「输入账号 <已清除>、口令 <已清除>，然后进入浏览页面」。
+      // 这条检查覆盖的是需求的核心断言：「输入管理员账号与口令，然后进入浏览页面」。
       // 只验「账号存在」不够 —— 能力列表是角色算出来的，会话是真签发的，
       // 受限数据是真按会话过滤的，三者任何一环断了都要在这里暴露。
-      await check('<已清除> / <已清除> 可登录并解锁「社团成员产出」（受限数据可见）', async () => {
-        const login = await call('POST', '/api/auth/login', {
-          body: { username: '<已清除>', password: '<已清除>' },
+      //
+      // ⚠️ 凭据取自 .env；未配置时标记为跳过（本项目无默认口令可试）。
+      if (!seedAdminConfigured) {
+        info(
+          '管理账号端到端登录（已跳过）',
+          '未在 .env 配置 SEED_ADMIN_USERNAME / SEED_ADMIN_PASSWORD，无凭据可试'
+        );
+      } else {
+        await check('管理账号可登录并解锁「社团成员产出」（受限数据可见）', async () => {
+          const login = await call('POST', '/api/auth/login', {
+            body: { username: seedAdminUser, password: seedAdminPass },
+          });
+          if (login.status !== 200) {
+            throw new Error(`登录失败 HTTP ${login.status}：${login.json?.error?.message ?? ''}`);
+          }
+          const caps = login.json?.data?.account?.capabilities ?? [];
+          // 「社团成员产出」路由守卫要求 canViewRestricted；管理后台要求 canManageContent
+          for (const need of ['canViewRestricted', 'canManageContent']) {
+            if (!caps.includes(need)) throw new Error(`能力列表缺少 ${need}：${caps.join('/')}`);
+          }
+
+          const cookie = _sessionCookieOf(login.setCookie, config.cookieName);
+          if (!cookie) throw new Error('登录成功却没有下发会话 cookie');
+
+          // 用同一会话读受限资料：必须比匿名看到更多（多出来的正是受限条目）
+          const asMember = await call('GET', '/api/resources?pageSize=500', { cookie });
+          const asGuest = await call('GET', '/api/resources?pageSize=500');
+          const memberItems = asMember.json?.data?.items ?? [];
+          const guestItems = asGuest.json?.data?.items ?? [];
+          const memberRestricted = memberItems.filter((it) => it.accessLevel !== 'public').length;
+          if (memberRestricted === 0) {
+            throw new Error('登录后仍看不到任何受限条目，「浏览页面」会是空的');
+          }
+          if (memberItems.length <= guestItems.length) {
+            throw new Error(
+              `登录视角条目数(${memberItems.length})未超过访客(${guestItems.length})，受限过滤可能失效`
+            );
+          }
+
+          // 会话必须被 /api/auth/me 认出来，前端守卫才能在刷新后放行
+          const me = await call('GET', '/api/auth/me', { cookie });
+          if (me.json?.data?.authenticated !== true) throw new Error('/api/auth/me 不认这个会话');
+
+          // 顺手确认隔离方向没写反：该会话不应把受限数据泄露给匿名（上面已验）
+          return `HTTP 200 · 登录视角 ${memberItems.length} 条（受限 ${memberRestricted} 条）> 访客 ${guestItems.length} 条`;
         });
-        if (login.status !== 200) {
-          throw new Error(`登录失败 HTTP ${login.status}：${login.json?.error?.message ?? ''}`);
-        }
-        const caps = login.json?.data?.account?.capabilities ?? [];
-        // 「社团成员产出」路由守卫要求 canViewRestricted；管理后台要求 canManageContent
-        for (const need of ['canViewRestricted', 'canManageContent']) {
-          if (!caps.includes(need)) throw new Error(`能力列表缺少 ${need}：${caps.join('/')}`);
-        }
-
-        const cookie = _sessionCookieOf(login.setCookie, config.cookieName);
-        if (!cookie) throw new Error('登录成功却没有下发会话 cookie');
-
-        // 用同一会话读受限资料：必须比匿名看到更多（多出来的正是受限条目）
-        const asMember = await call('GET', '/api/resources?pageSize=500', { cookie });
-        const asGuest = await call('GET', '/api/resources?pageSize=500');
-        const memberItems = asMember.json?.data?.items ?? [];
-        const guestItems = asGuest.json?.data?.items ?? [];
-        const memberRestricted = memberItems.filter((it) => it.accessLevel !== 'public').length;
-        if (memberRestricted === 0) {
-          throw new Error('登录后仍看不到任何受限条目，「浏览页面」会是空的');
-        }
-        if (memberItems.length <= guestItems.length) {
-          throw new Error(
-            `登录视角条目数(${memberItems.length})未超过访客(${guestItems.length})，受限过滤可能失效`
-          );
-        }
-
-        // 会话必须被 /api/auth/me 认出来，前端守卫才能在刷新后放行
-        const me = await call('GET', '/api/auth/me', { cookie });
-        if (me.json?.data?.authenticated !== true) throw new Error('/api/auth/me 不认这个会话');
-
-        // 顺手确认隔离方向没写反：该会话不应把受限数据泄露给匿名（上面已验）
-        return `HTTP 200 · 登录视角 ${memberItems.length} 条（受限 ${memberRestricted} 条）> 访客 ${guestItems.length} 条`;
-      });
+      }
 
       // --- 受限资料不能被匿名读到（核心防泄露断言）---
       await check('匿名访客读不到受限资料（即使伪造参数）', async () => {

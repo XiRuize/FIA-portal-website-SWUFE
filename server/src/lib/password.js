@@ -179,17 +179,17 @@ export function verifyPasswordAsync(password, stored) {
 }
 
 /**
- * 演示/评审账号口令豁免清单。
+ * （已移除）演示/评审账号口令豁免清单。
  *
- * 背景：协会站点需要一个「拿到就能进」的评审账号（账号 <已清除> / 口令 <已清除>），
- * 该口令只有 7 位，过不了 `MIN_PASSWORD_LENGTH`。这里**逐一列举**而不是放宽全局下限，
- * 理由有两点：
- * 1. 放宽下限会让所有账号一起变弱，代价远大于收益；
- * 2. 豁免名单是显式的，评审结束后删掉这一行即可收回，无需重新审视所有调用点。
+ * 历史上这里维护过一组「公开评审口令」白名单，用来放行一个 7 位的演示账号。
+ * 该机制已废弃：一处「任何人都能用的后台口令」，无论写在代码里还是文档里，
+ * 都是真实可利用的入口 —— 仓库公开后尤其如此。
  *
- * ⚠️ 该口令等价于公开口令，只用于演示与评审；正式投放前应改密或吊销该账号。
+ * 现在管理员口令由部署者在 `server/.env` 的 `SEED_ADMIN_PASSWORD` 中设置，
+ * 并由 `scripts/seed.mjs` 强制过本文件的强度校验。
+ * 需要短口令的场景只剩「系统随机生成的 6 位数字口令」一种，
+ * 它走下面 `allowGeneratedNumeric` 显式声明，不再有任何全局豁免名单。
  */
-const DEMO_PASSWORDS = new Set(['<已清除>']);
 
 /**
  * 生成 6 位数字口令 —— 用于「批准临时权限申请」时下发给申请人。
@@ -238,14 +238,14 @@ export function checkPasswordStrength(password, options = {}) {
     return { ok: false, reason: `口令至少 ${MIN_PASSWORD_LENGTH} 位` };
   }
   const generated = Boolean(options.allowGeneratedNumeric) && isGeneratedNumericPassword(password);
-  if (password.length < MIN_PASSWORD_LENGTH && !DEMO_PASSWORDS.has(password) && !generated) {
+  if (password.length < MIN_PASSWORD_LENGTH && !generated) {
     return { ok: false, reason: `口令至少 ${MIN_PASSWORD_LENGTH} 位` };
   }
   if (password.length > 200) {
     return { ok: false, reason: '口令过长（上限 200 位）' };
   }
   const weak = ['12345678', 'password', 'admin123', 'swufe2026', '88888888'];
-  if (weak.includes(password.toLowerCase()) && !DEMO_PASSWORDS.has(password)) {
+  if (weak.includes(password.toLowerCase())) {
     return { ok: false, reason: '口令过于常见，请更换' };
   }
   return { ok: true };

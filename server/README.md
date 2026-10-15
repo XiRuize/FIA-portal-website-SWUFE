@@ -56,19 +56,23 @@ npm start
 
 ## 3. 默认账号与首次修改
 
-`npm run seed` 会创建两个账号（口令在播种时打印一次，并同时写入 `server/.env` 供本地联调）：
+`npm run seed` 按 `server/.env` 创建账号（**没有默认口令**）：
 
-| 角色 | 用户名 | 默认口令 | 权限 |
+| 角色 | 用户名 | 口令 | 权限 |
 | --- | --- | --- | --- |
-| 管理权限 | `<已清除>` | `<已清除>` | 进入 `/admin`、`/productions`，管理账号、查看受限资料 |
-| 临时浏览 | `guest` | `<已清除>` | 仅浏览公开资料；到期自动失效 |
+| 管理权限 | `SEED_ADMIN_USERNAME` | `SEED_ADMIN_PASSWORD`（**必填**） | 进入 `/admin`、`/productions`，管理账号、查看受限资料 |
+| 临时浏览 | `SEED_VIEWER_USERNAME` | `SEED_VIEWER_PASSWORD`（可选） | 仅浏览公开资料；到期自动失效 |
 
-> `<已清除>` / `<已清除>` 是**演示口径**（公开口令），目的是让评审者「拿到就能进」。
-> 它 7 位的长度低于 `MIN_PASSWORD_LENGTH = 8`，因此走的是 `src/lib/password.js` 里的
-> `DEMO_PASSWORDS` **逐条白名单**，而不是下调全局下限 —— `1234567`、`password`
-> 之类的 7 位口令仍会被拒绝。撤销豁免只需删掉那一行。
+> ⚠️ **本项目不内置默认管理员口令。** 历史上存在过一个「拿到就能进」的评审账号，
+> 该机制已废弃 —— 仓库公开后，一个公开的后台口令就是真实可利用的入口。
 >
-> **部署到公网前必须改口令**：登录后在 `/admin` 页面修改，或直接编辑 `server/.env` 中的种子口令后重新播种。
+> 现在的约束：
+>
+> 1. `SEED_ADMIN_USERNAME` / `SEED_ADMIN_PASSWORD` 缺失时 seed **直接报错退出**；
+> 2. 口令先过 `checkPasswordStrength`（≥ 8 位，建议 ≥ 12 位，含大小写/数字/符号）；
+> 3. `src/lib/password.js` 的 `DEMO_PASSWORDS` 豁免白名单已删除，不再有任何短口令例外。
+>
+> 浏览账号为可选：两项都留空则跳过创建。
 > `.env` 已被 `.gitignore` 排除，不要提交到仓库。
 
 ---
@@ -260,7 +264,7 @@ curl -s --noproxy '*' -i -X POST $BASE/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"__probe_once","password":"wrong"}' | head -20
 
-# 4. 匿名读受限资料应拿不到（把 <已清除> 换成实际账号）
+# 4. 匿名读受限资料应拿不到（下文账号/口令换成 .env 中实际配置的值）
 #    注意观察返回条数与是否存在「研发部内部资料」
 curl -s --noproxy '*' "$BASE/api/resources?pageSize=500" | head -c 400
 curl -s --noproxy '*' "$BASE/api/resources?pageSize=500&restricted=1" | head -c 400
@@ -271,7 +275,7 @@ curl -s --noproxy '*' -o /dev/null -w '%{http_code}\n' $BASE/api/admin/accounts
 # 6. 登录并保存 cookie，然后确认身份与权限
 curl -s --noproxy '*' -c /tmp/fia.txt -X POST $BASE/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"<已清除>","password":"<已清除>"}'
+  -d '{"username":"<管理员账号>","password":"<管理员口令>"}'
 curl -s --noproxy '*' -b /tmp/fia.txt $BASE/api/auth/me
 
 # 7. 带 cookie 访问管理接口应 200
@@ -359,8 +363,8 @@ npm run setup && npm start
 
 ### 上线前检查清单
 
-- [ ] 修改 `<已清除>` 与 `guest` 的默认口令（`<已清除>` 是演示口令，等价于公开）
-- [ ] 视情况移除 `src/lib/password.js` 里的 `DEMO_PASSWORDS` 豁免
+- [ ] `SEED_ADMIN_PASSWORD` 是**自行设置的强口令**，不是任何文档/仓库里出现过的值
+- [ ] 不需要浏览账号就把 `SEED_VIEWER_*` 留空，避免在库里留长期有效的演示账号
 - [ ] `HOST` 按需改为 `0.0.0.0`
 - [ ] 走 HTTPS 时确认 Cookie 的 `secure` 已开启
 - [ ] `CORS_ORIGINS` 收紧为实际域名（不要留 `*`）

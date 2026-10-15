@@ -220,7 +220,7 @@ cp deploy/env.example server/.env
 bash deploy/gen-secret.sh
 ```
 
-然后编辑 `server/.env`，**必改三项**：
+然后编辑 `server/.env`，**必改四项**：
 
 ```bash
 nano server/.env
@@ -232,7 +232,13 @@ TRUST_PROXY=true        # 挂在 Nginx 之后必须开，否则登录限流拿�
 COOKIE_SECURE=true      # 线上是 HTTPS 必须开，否则登录后刷新即掉线
 MATERIALS_DIR=../资料分享模块素材    # 确认路径正确
 CORS_ORIGINS=https://fia2002.cn,https://www.fia2002.cn
+SEED_ADMIN_USERNAME=<自定义管理员账号>       # 必填，seed 脚本没有默认值
+SEED_ADMIN_PASSWORD=<自行生成的强口令>       # 必填，建议 ≥12 位；openssl rand -base64 18
 ```
+
+⚠️ **`SEED_ADMIN_*` 不填，部署会在第 4 步直接中止。** 本项目**不内置默认管理员口令**：
+默认口令一旦随公开仓库发布，就等于把后台入口一并公开。`seed.mjs` 检测到缺失时会报错退出，
+并把该填什么打印出来 —— 这是刻意设计的「响亮失败」，不要绕过它去改代码。
 
 ⚠️ **`COOKIE_SECURE=true` 和 HTTPS 必须同步**。开了它但没有 HTTPS，浏览器会拒收会话 Cookie，表现是「登录成功，一刷新就退回未登录」—— 这个现象很容易被误判成后端 bug。
 
@@ -385,7 +391,7 @@ sudo certbot renew --dry-run
 | 1 | 首页加载 | 各版块（合作单位、时间轴、行情终端）正常显示 | `/api` 反代没配 → 版块空白 |
 | 2 | 合作单位跑马灯 | 三行在动 | 见 `PITFALLS.md` 的 keyframes 问题 |
 | 3 | 行情终端 | 能搜到股票、K 线出图 | 服务器无法访问腾讯行情接口 |
-| 4 | 登录 `<已清除> / <已清除>` | 登录成功，刷新后仍在登录态 | `COOKIE_SECURE` 与 HTTPS 不匹配 |
+| 4 | 用 `server/.env` 里设的 `SEED_ADMIN_USERNAME` / `SEED_ADMIN_PASSWORD` 登录 | 登录成功，刷新后仍在登录态 | `COOKIE_SECURE` 与 HTTPS 不匹配；或 `.env` 漏配 `SEED_ADMIN_*`，seed 已中止 |
 | 5 | 后台「栏目与网站管理」 | 能看到三个顶级栏目 | 数据库未正确播种 |
 | 6 | 资料库列表 | 有资料，分类正确 | 素材目录未上传或路径错 |
 | 7 | 下载一份 PDF | 能下载完整文件 | Nginx `proxy_read_timeout` 太短 |
@@ -482,7 +488,7 @@ sudo tail -f /var/log/nginx/fia.error.log
 - [ ] 云厂商安全组只放行 22 / 80 / 443，**没有** 8787
 - [ ] `ufw status` 确认同上
 - [ ] SSH 已禁用密码登录，改用密钥（`/etc/ssh/sshd_config` 的 `PasswordAuthentication no`）
-- [ ] 演示账号 `guest / <已清除>` 的到期时间已核查，演示完毕及时吊销
-- [ ] 管理员账号 `<已清除>` 的密码已从默认值改掉
+- [ ] 管理员账号是**部署时自行设置**的（`SEED_ADMIN_PASSWORD`），不是任何文档/仓库里出现过的口令
+- [ ] 浏览账号（`SEED_VIEWER_*`）非必需则不创建；创建了要核查到期时间并及时吊销
 - [ ] 已删除服务器上所有开发用临时文件与备份 tar 包（避免源码与凭据泄露）
 - [ ] 已配置自动备份数据库

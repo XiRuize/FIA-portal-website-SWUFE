@@ -83,7 +83,7 @@ curl -s --noproxy '*' "$BASE/api/resources?pageSize=500"   # 26 条 / 0 条受�
 # --- 临时浏览账号（viewer）---
 curl -s --noproxy '*' -c /tmp/v.txt -X POST $BASE/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"guest","password":"<已清除>"}'
+  -d '{"username":"<浏览账号>","password":"<浏览账号口令>"}'
 curl -s --noproxy '*' -b /tmp/v.txt "$BASE/api/resources?pageSize=500"            # 60 条（含受限）
 curl -s --noproxy '*' -b /tmp/v.txt -o /dev/null -w '%{http_code}\n' $BASE/api/admin/accounts   # 403
 curl -s --noproxy '*' -b /tmp/v.txt -X PUT $BASE/api/settings \
@@ -92,7 +92,7 @@ curl -s --noproxy '*' -b /tmp/v.txt -X PUT $BASE/api/settings \
 # --- 管理账号（admin）---
 curl -s --noproxy '*' -c /tmp/a.txt -X POST $BASE/api/auth/login \
   -H 'Content-Type: application/json' \
-  -d '{"username":"<已清除>","password":"<已清除>"}'
+  -d '{"username":"<管理员账号>","password":"<管理员口令>"}'
 curl -s --noproxy '*' -b /tmp/a.txt -o /dev/null -w '%{http_code}\n' $BASE/api/admin/accounts   # 200
 curl -s --noproxy '*' -b /tmp/a.txt "$BASE/api/resources?pageSize=500"            # 60 条（受限 34）
 ```
@@ -138,9 +138,10 @@ grep -o '1458164460@qq.com' dist/assets/index-*.js
 后端准入链路（这是安全边界，前端那层只是体验）：
 
 ```bash
-# 用演示账号登录 → 会话 cookie → 受限数据真的变多
+# 用管理账号登录 → 会话 cookie → 受限数据真的变多
+# ⚠️ 账号与口令即 server/.env 的 SEED_ADMIN_USERNAME / SEED_ADMIN_PASSWORD
 curl -s --noproxy '*' -c /tmp/a.txt -X POST $BASE/api/auth/login \
-  -H 'Content-Type: application/json' -d '{"username":"<已清除>","password":"<已清除>"}'
+  -H 'Content-Type: application/json' -d '{"username":"<管理员账号>","password":"<管理员口令>"}'
 curl -s --noproxy '*' -b /tmp/a.txt $BASE/api/auth/me | grep -o '"capabilities":\[[^]]*\]'
 #    期望含 canViewRestricted（进 /productions 所需）与 canManageContent（进 /admin 所需）
 ```
@@ -148,15 +149,18 @@ curl -s --noproxy '*' -b /tmp/a.txt $BASE/api/auth/me | grep -o '"capabilities":
 `npm run verify` 中对应两条检查：
 
 ```
-[通过] 演示账号 <已清除> 存在且为管理权限（口令可校验）
-[通过] <已清除> / <已清除> 可登录并解锁「社团成员产出」（受限数据可见）
+[通过] 管理账号 <seed-admin> 存在且为管理权限（口令可校验）
+[通过] 管理账号可登录并解锁「社团成员产出」（受限数据可见）
        HTTP 200 · 登录视角 60 条（受限 34 条）> 访客 26 条
 ```
 
-> ⚠️ `<已清除>` 是**公开口令**，仅用于演示与评审。它的 7 位长度低于
-> `MIN_PASSWORD_LENGTH = 8`，因此在 `password.js` 里走的是 `DEMO_PASSWORDS`
-> **逐条白名单**，而不是下调全局下限 —— 7 位的 `1234567`、`password` 等仍被拒绝。
-> 正式投放前应改密或吊销该账号。
+> 这两条检查的凭据取自 `server/.env` 的 `SEED_ADMIN_USERNAME` /
+> `SEED_ADMIN_PASSWORD`。**本项目不内置默认管理员口令** ——
+> 未配置时它们会显示为 `[信息] …（已跳过）`，而不是去比对一个写死的口令。
+>
+> 早期版本内置过一个「拿到就能进」的评审账号（账号与口令相同、仅 7 位），
+> 并在 `password.js` 里用 `DEMO_PASSWORDS` 白名单豁免长度限制。
+> 该机制已随仓库公开而**整体移除**：公开的后台口令就是真实入口。
 
 ---
 
@@ -369,7 +373,7 @@ curl -s --noproxy '*' "$BASE/api/news/daily?limit=10&force=1" \
 | └ 数据 | `/#/admin` · 数据 | 累计浏览量 / 今日 / 独立访客 / 存活访客账号四张卡片；近 14 日趋势图；**存活访客账号带剩余时长倒计时，过期的用红字显示「已过期」并可一键延长** |
 | └ 内容上传与管理 | `/#/admin` · 内容上传与管理 | 左侧二级导航五个标签 **文件上传 / 内容条目 / 历史沿革 / 组织架构 / 站点设置**；文件上传页可选文件并勾选归档目录、展示类目、访问级别，上传后自动入库 |
 | └ 账号管理 | `/#/admin` · 账号管理 | 待审批申请显示**明文手机号**；批准后弹出口令回执与短信文案；下方是已运行的临时账号（账号 + 剩余时长 + 一键重置权限 / 延长）；最下是通知发件箱 |
-| 社团成员产出 | `/#/productions` | **导航栏对匿名访客可见**（不是隐藏）；点击后落到 `/#/login?next=%2Fproductions`，页面提示「仅限有权限账号浏览 + 申请邮箱」；用 `<已清除>` / `<已清除>` 登录后「继续前往」即可进入浏览页。**引导语下方有部门导航**（全部 / 研发部 / 培训部 / 宣传中心），点击即筛选，状态写进 URL（`?dept=研发部`）可与排序共存（`?dept=研发部&sort=likes`） |
+| 社团成员产出 | `/#/productions` | **导航栏对匿名访客可见**（不是隐藏）；点击后落到 `/#/login?next=%2Fproductions`，页面提示「仅限有权限账号浏览 + 申请邮箱」；用 `server/.env` 中配置的管理账号登录后「继续前往」即可进入浏览页。**引导语下方有部门导航**（全部 / 研发部 / 培训部 / 宣传中心），点击即筛选，状态写进 URL（`?dept=研发部`）可与排序共存（`?dept=研发部&sort=likes`） |
 
 > 路由守卫（`src/components/auth/RequireAuth.tsx`）只负责**展示层准入**。
 > 真正的数据隔离在后端按会话判定——绕过守卫也拿不到受限数据，这一点由第 3 节的
@@ -382,20 +386,20 @@ curl -s --noproxy '*' "$BASE/api/news/daily?limit=10&force=1" \
 
 ## 7. 初始账号
 
-`npm run setup` 会播种两个账号（首次登录后请立即改口令）：
+`npm run setup` 按 `server/.env` 播种账号：
 
-| 用户名 | 角色 | 默认口令 | 权限 |
+| 用户名 | 角色 | 口令来源 | 权限 |
 | --- | --- | --- | --- |
-| `<已清除>` | 管理权限 | `<已清除>` | 内容管理、账号管理、受限内容、社团成员产出 |
-| `guest` | 临时浏览 | `<已清除>` | 仅受限内容浏览，30 天后到期 |
+| `.env` 的 `SEED_ADMIN_USERNAME` | 管理权限 | `SEED_ADMIN_PASSWORD`（**必填**） | 内容管理、账号管理、受限内容、社团成员产出 |
+| `.env` 的 `SEED_VIEWER_USERNAME` | 临时浏览 | `SEED_VIEWER_PASSWORD`（可选） | 仅受限内容浏览，默认 30 天后到期 |
 
-> `<已清除>` / `<已清除>` 是**演示口令**，为了让评审者「拿到就能进」。它 7 位的长度低于
-> `MIN_PASSWORD_LENGTH = 8`，因此在 `src/lib/password.js` 里走的是 `DEMO_PASSWORDS`
-> 白名单（逐条列举），**没有**下调全局下限 —— `1234567`、`password` 等 7 位口令仍被拒绝。
-> 这个豁免是可撤销的：删掉那一行即恢复全局限定。
-
-口令可在 `server/.env` 里用 `SEED_ADMIN_PASSWORD` / `SEED_VIEWER_PASSWORD` 覆盖。
-**部署到公网前必须改掉默认口令**，并在 `.env` 里设置 `SESSION_SECRET`。
+> ⚠️ **本项目不提供默认管理员口令。** `SEED_ADMIN_USERNAME` /
+> `SEED_ADMIN_PASSWORD` 缺失时 `scripts/seed.mjs` 会**直接报错退出**；
+> 口令还会先过 `checkPasswordStrength`（≥ 8 位，建议 ≥ 12 位，四类字符齐全）。
+> `src/lib/password.js` 的 `DEMO_PASSWORDS` 豁免白名单也已删除，不再有短口令例外。
+>
+> 浏览账号为可选：`SEED_VIEWER_USERNAME` / `SEED_VIEWER_PASSWORD` 都留空则跳过创建。
+> 部署到公网前，请同时确认 `.env` 里的 `FINGERPRINT_SECRET` 已设为随机值。
 
 ---
 

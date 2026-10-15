@@ -276,17 +276,17 @@ test('checkPasswordStrength：拒绝弱口令', () => {
   assert.equal(strong.ok, true, '足够复杂的口令应通过');
 });
 
-test('checkPasswordStrength：演示口令豁免是白名单，不放宽全局下限', () => {
-  // 评审账号 <已清除> 只有 7 位，必须能通过 —— 否则新建/改密路径会拒绝它
-  assert.equal(checkPasswordStrength('<已清除>').ok, true, '演示口令应被放行');
-
-  // 豁免必须逐条列举，不能顺手把下限降到 7：
-  // 下面这些同样是 7 位或更短，但都**不能**因为豁免而混进来
-  for (const p of ['1234567', 'password', 'admin12', 'swufe26', 'FIA202']) {
-    assert.equal(checkPasswordStrength(p).ok, false, `${p} 不应被豁免`);
+test('checkPasswordStrength：不存在任何豁免名单，短口令一律拒绝', () => {
+  // 历史上存在一组「公开评审口令」白名单（用于放行一个 7 位演示账号），已移除。
+  // 仓库公开后，任何被豁免的短口令都等于公开入口。这条断言的作用是：
+  // 一旦有人把豁免名单加回来，测试会立刻失败。
+  for (const p of ['1234567', 'admin12', 'swufe26', 'abc1234', 'Pass12']) {
+    assert.equal(checkPasswordStrength(p).ok, false, `${p} 不应被放行`);
   }
   // 8 位仍走常规路径：字典口令继续拒绝
   assert.equal(checkPasswordStrength('admin123').ok, false, '8 位字典口令仍应拒绝');
+  // 合规口令照常通过
+  assert.equal(checkPasswordStrength('Fia@Admin2026').ok, true, '合规口令应通过');
 });
 
 /* ─────────────────── 中文文件名与 Range ─────────────────── */

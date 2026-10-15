@@ -54,7 +54,7 @@ cd "$APP_DIR"
 
 command -v node >/dev/null || die "找不到 node，请先安装 Node 22+"
 command -v pnpm >/dev/null || die "找不到 pnpm，请先 npm i -g pnpm"
-[ -f server/.env ] || warn "server/.env 不存在，后端将使用内置默认值（生产环境不推荐）"
+[ -f server/.env ] || die "server/.env 不存在 —— 后端配置与 seed 账号口令都从这里读，且 seed 脚本没有默认管理员口令（cp deploy/env.example server/.env 后填写）"
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 [ "$NODE_MAJOR" -ge 22 ] || die "Node 版本过低（当前 $(node -v)），后端需要 >= 22.5.0"
@@ -198,7 +198,8 @@ cat <<'EOF'
 
 后续人工验证（脚本无法代替）：
   1. 浏览器打开 https://fia2002.cn/          —— 检查首页各版块正常
-  2. 用 <已清除> 登录 → 进入「栏目与网站管理」 —— 检查后台可用
+  2. 用 server/.env 里的 SEED_ADMIN_USERNAME / SEED_ADMIN_PASSWORD 登录
+     → 进入「栏目与网站管理」 —— 检查后台可用
   3. 打开一条受限资料 → 下载 PDF             —— 检查闸门与大文件传输
   4. 检查登录 Cookie 是否持久                —— 刷新页面不应掉登录
 

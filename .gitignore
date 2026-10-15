@@ -70,8 +70,13 @@ server/data/.env
 #
 # ⚠️ .workbuddy/tmp/ 里会残留 cookies.txt / login.json 等**会话凭据**
 #    与多个浏览器 profile（曾堆到 315 MB），一律不入库。
-#    memory/ 是项目长期记忆，保留。
+#
+# ⚠️ .workbuddy/memory/ 是**开发过程日记**（逐日的排查记录、服务器地址、
+#    运维细节），不属于项目源码。仓库转为公开后，它既不适合作为对外的
+#    项目展示内容，也会让每次会话都产生噪声提交。故整体移出版本控制 ——
+#    文件仍保留在本地磁盘，只是不再进 git。
 # ---------------------------------------------------------------------------
+.workbuddy/memory/
 .workbuddy/tmp/
 .workbuddy/**/cookies.txt
 .workbuddy/**/*cookies*.txt

@@ -10,11 +10,14 @@
  *   node scripts/seed.mjs --reset-password    # 强制把种子账号口令重置为 .env 里的值
  *
  * 账号口令来源：server/.env（参考 .env.example）。
+ *
+ * ⚠️ 管理账号**没有内置默认口令**：缺失配置时本脚本直接报错退出，
+ *    不会回落到任何已知口令 —— 理由见下方 REQUIRED_ENV_KEYS 处。
  */
 import { buildConfig, createEnv } from '../src/lib/env.js';
 import { openDatabase, plain } from '../src/lib/db.js';
 import { ROLE_ADMIN, ROLE_VIEWER } from '../src/lib/accounts.js';
-import { hashPasswordAsync } from '../src/lib/password.js';
+import { hashPasswordAsync, checkPasswordStrength } from '../src/lib/password.js';
 
 const env = createEnv();
 const config = buildConfig(env);
@@ -30,14 +33,55 @@ function mask(name) {
   return s[0] + '*'.repeat(s.length - 2) + s[s.length - 1];
 }
 
-// ⚠️ 管理账号默认值为评审口径：账号 <已清除> / 口令 <已清除>（等价于公开口令）。
-//    正式投放前请改 .env 的 SEED_ADMIN_USERNAME / SEED_ADMIN_PASSWORD，或登录后改密。
-const adminUsername = env.get('SEED_ADMIN_USERNAME', '<已清除>');
-const adminPassword = env.get('SEED_ADMIN_PASSWORD', '<已清除>');
-const viewerUsername = env.get('SEED_VIEWER_USERNAME', 'guest');
-const viewerPassword = env.get('SEED_VIEWER_PASSWORD', '<已清除>');
+// ⚠️ 管理账号**没有内置默认口令**。
+//
+// 此前这里给出过一个「拿到就能进」的评审账号（账号与口令相同，且只有 7 位），
+// 目的是让评审者免配置就能进后台。这个做法在**公开仓库**里不成立：
+// 默认口令一旦随代码公开，就等于把后台入口一并公开 —— 只要部署时忘了配 .env，
+// 它就会在生产环境真实生效。
+//
+// 因此改为「必须显式配置」：缺失即报错退出，绝不回落到任何已知口令。
+const REQUIRED_ENV_KEYS = ['SEED_ADMIN_USERNAME', 'SEED_ADMIN_PASSWORD'];
+const missingEnvKeys = REQUIRED_ENV_KEYS.filter((key) => !String(env.get(key, '')).trim());
+
+if (missingEnvKeys.length > 0) {
+  console.error('');
+  console.error('❌ 缺少必填的种子账号配置：' + missingEnvKeys.join('、'));
+  console.error('');
+  console.error('   本项目不内置默认管理员口令。请先复制模板再填写：');
+  console.error('     cp .env.example .env');
+  console.error('');
+  console.error('   至少要设这两项：');
+  console.error('     SEED_ADMIN_USERNAME=<管理员账号名>');
+  console.error('     SEED_ADMIN_PASSWORD=<建议 >=12 位，含大小写字母 / 数字 / 符号>');
+  console.error('');
+  console.error('   生成一个随机口令：');
+  console.error("     node -e \"console.log(require('crypto').randomBytes(12).toString('base64url'))\"");
+  console.error('');
+  process.exit(1);
+}
+
+const adminUsername = String(env.get('SEED_ADMIN_USERNAME', '')).trim();
+const adminPassword = String(env.get('SEED_ADMIN_PASSWORD', ''));
+
+// 播种前先过一遍强度校验。本文件是**直接写库**的（绕过了服务层的
+// createAccount），所以服务层那道校验在这里不会自动生效，必须显式补上 ——
+// 否则「把弱口令写进生产库」就只靠调用方自觉了。
+const adminStrength = checkPasswordStrength(adminPassword);
+if (!adminStrength.ok) {
+  console.error('');
+  console.error(`❌ SEED_ADMIN_PASSWORD 未通过强度校验：${adminStrength.reason}`);
+  console.error('   请换一个更长的口令（建议 >=12 位，含大小写字母 / 数字 / 符号）。');
+  console.error('');
+  process.exit(1);
+}
+
+// 临时浏览账号为**可选**：两项都配置了才创建；留空则跳过，不回落到任何已知口令。
+const viewerUsername = String(env.get('SEED_VIEWER_USERNAME', '')).trim();
+const viewerPassword = String(env.get('SEED_VIEWER_PASSWORD', ''));
+const viewerEnabled = Boolean(viewerUsername && viewerPassword);
 const viewerDays = env.int('SEED_VIEWER_DAYS', 30);
-const viewerNote = env.get('SEED_VIEWER_NOTE', '初始演示浏览账号');
+const viewerNote = env.get('SEED_VIEWER_NOTE', '临时浏览账号');
 
 /** 站点配置默认值（与前端 siteConfig 的键名保持一致，便于逐键对照） */
 const DEFAULT_SETTINGS = [
@@ -124,16 +168,22 @@ await ensureAccount({
   displayName: '协会管理员',
 });
 
-// 2) 临时浏览权限账号（有有效期，过期作废）
-const viewerExpiresAt = new Date(Date.now() + viewerDays * 86_400_000).toISOString();
-await ensureAccount({
-  username: viewerUsername,
-  password: viewerPassword,
-  role: ROLE_VIEWER,
-  expiresAt: viewerExpiresAt,
-  note: viewerNote,
-  displayName: '临时浏览账号',
-});
+// 2) 临时浏览权限账号（可选：两项都配置了才创建；有有效期，过期作废）
+const viewerExpiresAt = viewerEnabled
+  ? new Date(Date.now() + viewerDays * 86_400_000).toISOString()
+  : null;
+if (viewerEnabled) {
+  await ensureAccount({
+    username: viewerUsername,
+    password: viewerPassword,
+    role: ROLE_VIEWER,
+    expiresAt: viewerExpiresAt,
+    note: viewerNote,
+    displayName: '临时浏览账号',
+  });
+} else {
+  console.log('· 未配置 SEED_VIEWER_USERNAME / SEED_VIEWER_PASSWORD，跳过临时浏览账号');
+}
 
 // 3) 站点配置默认值：只在键不存在时插入，不覆盖已有值
 const now = new Date().toISOString();
@@ -154,14 +204,18 @@ console.log('✅ 种子数据初始化完成');
 console.log('');
 console.log('   已就绪的账号：');
 console.log(`     管理权限账号      ${mask(adminUsername)}（角色 admin，可访问 /admin 与 /productions）`);
-console.log(`     临时浏览权限账号  ${mask(viewerUsername)}（角色 viewer，到期 ${viewerExpiresAt}）`);
+if (viewerEnabled) {
+  console.log(`     临时浏览权限账号  ${mask(viewerUsername)}（角色 viewer，到期 ${viewerExpiresAt}）`);
+} else {
+  console.log('     临时浏览权限账号  （未配置，已跳过）');
+}
 console.log('');
 console.log('   口令取自 .env 的 SEED_ADMIN_PASSWORD / SEED_VIEWER_PASSWORD，');
 console.log('   出于安全考虑不在此处回显。若忘记，请查看 .env 或执行：');
 console.log('     node scripts/seed.mjs --reset-password   （会重置为 .env 中当前配置的口令）');
 console.log('   登录后也可调用 POST /api/auth/password 自助改密。');
 console.log('');
-console.log('   ⚠️ 正式部署前必须修改 .env 里的 SEED_*_PASSWORD 与 FINGERPRINT_SECRET。');
+console.log('   ⚠️ 正式部署前必须确认 .env 里的 FINGERPRINT_SECRET 已设为随机值。');
 console.log('─'.repeat(72));
 
 db.close();
